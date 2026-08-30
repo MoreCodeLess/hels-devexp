@@ -150,12 +150,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor--
 				return m, m.ensureStreamForCursor()
 			}
+			return m, nil
 		case "down", "j":
 			if m.cursor < len(m.containers)-1 {
 				m.cursor++
 				return m, m.ensureStreamForCursor()
 			}
+			return m, nil
 		}
+		// cualquier otra tecla (pgup, pgdown, home, end, ctrl+u/d, ...) se la
+		// pasamos al viewport para que scrollee los logs.
+
+	case tea.MouseMsg:
+		// la rueda del mouse también scrollea el panel de logs, nunca cambia
+		// el servicio seleccionado.
 	}
 
 	var cmd tea.Cmd

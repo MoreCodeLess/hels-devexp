@@ -17,7 +17,7 @@ var dashboardCmd = &cobra.Command{
 seleccionado. Navegá con las flechas o j/k, salí con q.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		m := tui.New()
-		p := tea.NewProgram(m, tea.WithAltScreen())
+		p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 		m.AttachProgram(p)
 
 		if _, err := p.Run(); err != nil {
