@@ -67,13 +67,45 @@ chmod +x "$install_dir/$BIN_NAME"
 
 echo "hels instalado en $install_dir/$BIN_NAME"
 
+# Agrega install_dir al PATH de forma idempotente en un archivo de shell.
+add_to_path_rc() {
+  rc_file="$1"
+  line="export PATH=\"$install_dir:\$PATH\""
+
+  if [ -f "$rc_file" ] && grep -qF "$install_dir" "$rc_file" 2>/dev/null; then
+    return 0
+  fi
+
+  {
+    echo ""
+    echo "# hels: agregado por install.sh"
+    echo "$line"
+  } >> "$rc_file"
+  echo "  -> agregado a $rc_file"
+}
+
 case ":$PATH:" in
   *":$install_dir:"*) ;;
   *)
     echo ""
-    echo "$install_dir no está en tu PATH. Agregá esta línea a tu ~/.bashrc, ~/.zshrc, etc:"
-    echo "  export PATH=\"$install_dir:\$PATH\""
+    echo "$install_dir no estaba en tu PATH. Ajustando tu shell:"
+    shell_name="$(basename "${SHELL:-sh}")"
+    case "$shell_name" in
+      zsh)
+        add_to_path_rc "$HOME/.zshrc"
+        add_to_path_rc "$HOME/.zprofile"
+        ;;
+      bash)
+        add_to_path_rc "$HOME/.bashrc"
+        add_to_path_rc "$HOME/.profile"
+        ;;
+      *)
+        add_to_path_rc "$HOME/.profile"
+        ;;
+    esac
+    echo "  Abrí una terminal nueva (o una nueva sesión SSH) para que tome efecto."
     echo ""
+    export PATH="$install_dir:$PATH"
     ;;
 esac
 
