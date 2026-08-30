@@ -1,0 +1,18 @@
+version: 1
+
+project:
+  name: mi-servicio
+  description: "Ejemplo generado por 'hels init'"
+
+environments:
+  dev:
+    engine: floci
+    region: us-east-1
+    account_id: "000000000000"
+    port: 4566
+    storage:
+      mode: memory
+    services:
+      - s3
+      - lambda
+      - dynamodb
