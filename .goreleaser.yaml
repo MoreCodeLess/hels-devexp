@@ -1,0 +1,44 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: hels
+    main: ./cmd/hels
+    binary: hels
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/MoreCodeLess/hels-devexp/internal/cli.Version={{.Version}}
+
+archives:
+  - id: hels
+    formats: [tar.gz]
+    name_template: >-
+      hels_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: MoreCodeLess
+    name: hels-devexp
