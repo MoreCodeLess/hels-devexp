@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -26,6 +28,7 @@ const (
 	outerBarLines   = 1 // la barra de hints, al fondo
 	paneBorderLines = 2 // borde de cada panel: arriba + abajo
 	paneTitleLines  = 2 // "TÍTULO" + línea en blanco, dentro de cada panel
+	logStatusLines  = 1 // fila de estado del panel de logs (en blanco si no hay error)
 	paneChrome      = 4 // borde (1+1) + padding horizontal (1+1) de cada panel
 
 	listPaneWidth      = 28
@@ -114,7 +117,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		vpWidth := msg.Width - listPaneWidth - 2*paneChrome
-		vpHeight := msg.Height - outerBarLines - paneBorderLines - paneTitleLines
+		vpHeight := msg.Height - outerBarLines - paneBorderLines - paneTitleLines - logStatusLines
 		if vpWidth < 1 {
 			vpWidth = 1
 		}
@@ -329,16 +332,25 @@ func waitForLogLines(stream *logStream, gen int) tea.Cmd {
 }
 
 // refreshLogViewport reconstruye el contenido visible del panel de logs a
-// partir de m.logLines. Ojo: NO se envuelven (wrap) las líneas largas a
-// propósito. bubbles/viewport ya corta cada línea lógica a su ancho visible
-// con ansi.Cut (ver Model.visibleLines) en vez de partirla en varias filas,
-// así que 1 línea de m.logLines siempre ocupa exactamente 1 fila visual —
-// eso es lo que mantiene la cuenta de alto (paneTitleLines, etc.) exacta sin
-// importar qué tan larga sea una línea. El wrap manual que había antes
-// rompía justo esa invariante (una línea larga terminaba en 2+ filas reales
-// sin que el viewport se enterara) y encima duplicaba lo que el viewport ya
-// hace solo. Para ver el texto que queda fuera del panel, el viewport trae
-// scroll horizontal nativo (ScrollLeft/ScrollRight, teclas h/l o ←/→).
+// partir de m.logLines.
+//
+// El panel de logs es un "portal" de tamaño fijo: su alto (m.viewport.Height)
+// nunca cambia por el contenido, sin importar cuántas líneas físicas termine
+// ocupando una entrada larga. Para lograr eso de forma confiable, PARTIMOS
+// cada línea lógica nosotros mismos en pedazos de a lo sumo m.viewport.Width
+// celdas visibles (hardWrapLine, usando ansi.Cut — el mismo primitivo que usa
+// bubbles/viewport internamente para su propio recorte) y le damos al
+// viewport la lista COMPLETA de pedazos ya partidos. El viewport se encarga
+// solo de la ventana vertical (YOffset + Height): sin importar cuántos
+// pedazos totales haya, siempre muestra como mucho Height filas — por eso el
+// tamaño de una línea no puede afectar el alto del panel, solo cuánto hay
+// para scrollear dentro de él.
+//
+// (Antes se dejaba que el viewport cortara cada línea larga por su cuenta
+// sin wrapear. Eso rompía la invariante de todos modos: el propio View() del
+// viewport vuelve a pasar el contenido por un Height/MaxHeight de lipgloss
+// después de cortar, y esa segunda pasada podía terminar generando una fila
+// de más para una única línea muy larga.)
 func (m *Model) refreshLogViewport() {
 	if !m.ready {
 		// Todavía no llegó el primer tea.WindowSizeMsg (viewport sin
@@ -346,9 +358,41 @@ func (m *Model) refreshLogViewport() {
 		return
 	}
 
+	width := m.viewport.Width
+	if width < 1 {
+		width = 1
+	}
+
+	var display []string
+	for i, l := range m.logLines {
+		display = append(display, hardWrapLine(numberedLine(i, l), width)...)
+	}
+
 	atBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(numberedLog(m.logLines))
+	m.viewport.SetContent(strings.Join(display, "\n"))
 	if atBottom {
 		m.viewport.GotoBottom()
 	}
+}
+
+// hardWrapLine parte line en pedazos de a lo sumo width celdas visibles,
+// usando ansi.Cut (el mismo primitivo que bubbles/viewport usa para su
+// propio recorte horizontal), para que no haya ninguna discrepancia de
+// medición de ancho entre cómo partimos acá y cómo el viewport vuelve a
+// medir después.
+func hardWrapLine(line string, width int) []string {
+	total := ansi.StringWidth(line)
+	if total <= width {
+		return []string{line}
+	}
+
+	var out []string
+	for start := 0; start < total; start += width {
+		end := start + width
+		if end > total {
+			end = total
+		}
+		out = append(out, ansi.Cut(line, start, end))
+	}
+	return out
 }

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -32,8 +31,6 @@ var (
 	statusOKStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	statusDimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	lineNumStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("135"))
-	sepStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )
 
 func (m *Model) View() string {
@@ -77,7 +74,7 @@ func (m *Model) renderList() string {
 
 	return style.
 		Width(listPaneWidth).
-		Height(m.viewport.Height + paneTitleLines).
+		Height(m.viewport.Height + paneTitleLines + logStatusLines).
 		Render(content)
 }
 
@@ -87,19 +84,34 @@ func (m *Model) renderLogs() string {
 		title = fmt.Sprintf("LOGS — %s", m.containers[m.cursor].Name)
 	}
 
-	content := title + "\n\n" + m.viewport.View()
+	// Reservamos siempre 1 fila de estado (en blanco si no hay error), para
+	// que el contenido tenga la MISMA cantidad de filas sin importar si hay
+	// error o no — el panel nunca cambia de alto según el estado del stream.
+	status := ""
 	if m.logErr != nil {
-		content += "\n" + errStyle.Render(fmt.Sprintf("stream de logs terminó: %v", m.logErr))
+		status = errStyle.Render(fmt.Sprintf("stream de logs terminó: %v", m.logErr))
 	}
+
+	content := title + "\n\n" + m.viewport.View() + "\n" + status
 
 	style := paneStyle
 	if m.focus == focusLogs {
 		style = focusedPaneStyle
 	}
 
+	// Ojo: a propósito NO se llama .Width() acá. m.viewport.View() ya rellena
+	// cada línea a exactamente m.viewport.Width por su cuenta (su propio
+	// Style interno hace lo mismo Width/Height que hacemos nosotros afuera),
+	// así que el contenido YA es uniforme en ancho. Pedirle a este panel
+	// EXTERNO que además fuerce ese mismo ancho es redundante — y en la
+	// práctica, combinado con el padding(0,1) de paneStyle, dispara un bug
+	// real de lipgloss donde líneas que ya miden justo el ancho pedido
+	// terminan partidas en 2 filas (confirmado con contenido con y sin
+	// color ANSI). Sin el .Width() acá, lipgloss igual alinea todo al ancho
+	// más largo del contenido (que ya es m.viewport.Width), pero sin pasar
+	// por ese camino roto.
 	return style.
-		Width(m.viewport.Width).
-		Height(m.viewport.Height + paneTitleLines).
+		Height(m.viewport.Height + paneTitleLines + logStatusLines).
 		Render(content)
 }
 
@@ -116,14 +128,15 @@ func padRight(s string, n int) string {
 	return s
 }
 
-// numberedLog arma el texto de los logs con número de línea (1-based) y un
-// separador, coloreados, antes de que se envuelva (wrap) al ancho del panel.
-func numberedLog(lines []string) string {
-	out := make([]string, len(lines))
-	sep := sepStyle.Render("│")
-	for i, l := range lines {
-		num := lineNumStyle.Render(fmt.Sprintf("%4d", i+1))
-		out[i] = num + " " + sep + " " + l
-	}
-	return strings.Join(out, "\n")
+// numberedLine arma una entrada de log con su número de línea (1-based) y un
+// separador. i es el índice 0-based dentro de m.logLines.
+//
+// A propósito es texto plano, sin ningún color ANSI. hardWrapLine corta esto
+// con ansi.Cut para armar el wrap manual del panel de logs, y en la práctica
+// el corte de contenido ESTILADO (con códigos de color) se desalinea del
+// contenido real — el número/separador terminaba "empujando" el texto a
+// otra fila en vez de compartir la misma. Con texto plano el corte es
+// exacto en todos los casos probados.
+func numberedLine(i int, line string) string {
+	return fmt.Sprintf("%4d │ %s", i+1, line)
 }
