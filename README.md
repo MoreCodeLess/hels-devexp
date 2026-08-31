@@ -34,6 +34,26 @@ específica.
 
 Ver el esquema completo de `hels.yaml` en [`hels.example.yaml`](./hels.example.yaml).
 
+### Entornos locales
+
+```bash
+hels env up dev       # levanta el entorno "dev" (o confirma que ya está corriendo)
+hels env status dev   # muestra su estado
+hels env list         # lista todos los entornos declarados en hels.yaml
+hels env down dev     # lo baja
+
+eval "$(hels env switch dev)"   # lo levanta, lo marca como activo, y exporta
+                                 # AWS_ENDPOINT_URL/AWS_DEFAULT_REGION/credenciales
+                                 # dummy para apuntar tu AWS SDK/CLI ahí
+```
+
+Cada entorno corre como un contenedor Docker de [floci](https://github.com/floci-io/floci)
+(el motor de simulación de AWS), gestionado directamente vía `docker` — no hace
+falta instalar el CLI de floci por separado. `up`/`switch` son idempotentes: si
+el entorno ya está corriendo, no hacen nada. El entorno "activo" (el que usa
+`switch`) se guarda en `.hels/state.json`, un archivo local **no versionado**
+(ver `.gitignore`) — `hels.yaml` sigue siendo 100% declarativo y reproducible.
+
 ## Desarrollo
 
 ```bash

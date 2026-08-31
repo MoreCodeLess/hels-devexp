@@ -30,3 +30,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Estado local de hels (entorno activo, etc.) — nunca versionado, ver
+# internal/env/state.go
+.hels/
