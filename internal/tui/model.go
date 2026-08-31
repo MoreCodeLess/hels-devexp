@@ -49,9 +49,11 @@ type containersLoadedMsg struct {
 
 type refreshTickMsg time.Time
 
-type logLineMsg struct {
-	gen  int
-	line string
+// logLinesMsg trae un lote de líneas ya listas del stream, no una por
+// mensaje — ver waitForLogLines para el porqué.
+type logLinesMsg struct {
+	gen   int
+	lines []string
 }
 
 type logStreamErrMsg struct {
@@ -151,16 +153,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshTickMsg:
 		return m, tea.Batch(loadContainersCmd(), tickCmd())
 
-	case logLineMsg:
+	case logLinesMsg:
 		if msg.gen != m.logGen {
 			return m, nil
 		}
-		m.logLines = append(m.logLines, msg.line)
+		m.logLines = append(m.logLines, msg.lines...)
 		if len(m.logLines) > maxLogLines {
 			m.logLines = m.logLines[len(m.logLines)-maxLogLines:]
 		}
 		m.refreshLogViewport()
-		return m, waitForLogLine(m.stream, msg.gen)
+		return m, waitForLogLines(m.stream, msg.gen)
 
 	case logStreamErrMsg:
 		if msg.gen != m.logGen {
@@ -278,7 +280,7 @@ func (m *Model) ensureStreamForCursor() tea.Cmd {
 	}
 	m.stream = stream
 
-	return waitForLogLine(stream, gen)
+	return waitForLogLines(stream, gen)
 }
 
 func (m *Model) stopStream() {
@@ -289,10 +291,16 @@ func (m *Model) stopStream() {
 	m.selectedID = ""
 }
 
-// waitForLogLine devuelve un tea.Cmd que espera la próxima línea del stream
-// dado. Cada línea recibida vuelve a encadenar esta misma espera (patrón
-// estándar de bubbletea para consumir un canal sin bloquear el Update loop).
-func waitForLogLine(stream *logStream, gen int) tea.Cmd {
+// waitForLogLines devuelve un tea.Cmd que espera al menos una línea nueva del
+// stream y de paso agrupa (drena, sin bloquear) cualquier otra línea que ya
+// esté esperando en el canal. Esto importa mucho para un contenedor con
+// historial largo (ej. sshd con cientos de conexiones logueadas): al
+// seleccionarlo, "docker logs --tail N" entrega ese historial casi de
+// golpe, y sin agrupar cada línea dispara su propio ciclo completo de
+// Update+render (con su propio re-wrap de todo el buffer) — una ráfaga de
+// cientos de mensajes en milisegundos que satura el render y rompe la
+// vista. Agrupando, esa misma ráfaga se procesa en uno o pocos renders.
+func waitForLogLines(stream *logStream, gen int) tea.Cmd {
 	if stream == nil {
 		return nil
 	}
@@ -302,7 +310,22 @@ func waitForLogLine(stream *logStream, gen int) tea.Cmd {
 			err := <-stream.Done
 			return logStreamErrMsg{gen: gen, err: err}
 		}
-		return logLineMsg{gen: gen, line: line}
+
+		lines := []string{line}
+	drain:
+		for {
+			select {
+			case l, ok := <-stream.Lines:
+				if !ok {
+					break drain
+				}
+				lines = append(lines, l)
+			default:
+				break drain
+			}
+		}
+
+		return logLinesMsg{gen: gen, lines: lines}
 	}
 }
 
