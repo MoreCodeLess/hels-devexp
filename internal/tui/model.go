@@ -5,6 +5,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muesli/reflow/wrap"
 )
 
 const (
@@ -20,14 +21,17 @@ const (
 	// listPaneOuterWidth también se usan para traducir un click de mouse a
 	// fila/columna (hitTestList más abajo) — si se cambia el layout en un
 	// lado hay que actualizar el otro.
-	outerHeaderLines = 1 // la barra azul de arriba
-	paneBorderLines  = 2 // borde de cada panel: arriba + abajo
-	paneTitleLines   = 2 // "TÍTULO" + línea en blanco, dentro de cada panel
-	paneChrome       = 4 // borde (1+1) + padding horizontal (1+1) de cada panel
+	//
+	// La barra de hints va ABAJO de todo, así que no suma nada antes del
+	// panel de lista/logs (listItemsTopRow arranca directo en el borde).
+	outerBarLines   = 1 // la barra de hints, al fondo
+	paneBorderLines = 2 // borde de cada panel: arriba + abajo
+	paneTitleLines  = 2 // "TÍTULO" + línea en blanco, dentro de cada panel
+	paneChrome      = 4 // borde (1+1) + padding horizontal (1+1) de cada panel
 
 	listPaneWidth      = 28
 	listPaneOuterWidth = listPaneWidth + paneChrome
-	listItemsTopRow    = outerHeaderLines + 1 + paneTitleLines // + 1 = borde-top
+	listItemsTopRow    = 1 + paneTitleLines // 1 = borde-top del panel
 )
 
 // focusArea indica qué panel recibe el teclado y el scroll en este momento.
@@ -109,7 +113,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		vpWidth := msg.Width - listPaneWidth - 2*paneChrome
-		vpHeight := msg.Height - outerHeaderLines - paneBorderLines - paneTitleLines
+		vpHeight := msg.Height - outerBarLines - paneBorderLines - paneTitleLines
 		if vpWidth < 1 {
 			vpWidth = 1
 		}
@@ -123,6 +127,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.Width = vpWidth
 			m.viewport.Height = vpHeight
 		}
+		// El ancho pudo haber cambiado (resize de la terminal): hay que
+		// re-envolver todo el buffer de logs ya acumulado a la medida nueva,
+		// si no las líneas viejas quedan envueltas al ancho anterior y
+		// pueden volver a desbordar.
+		m.refreshLogViewport()
 		return m, nil
 
 	case containersLoadedMsg:
@@ -150,11 +159,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.logLines) > maxLogLines {
 			m.logLines = m.logLines[len(m.logLines)-maxLogLines:]
 		}
-		atBottom := m.viewport.AtBottom()
-		m.viewport.SetContent(joinLines(m.logLines))
-		if atBottom {
-			m.viewport.GotoBottom()
-		}
+		m.refreshLogViewport()
 		return m, waitForLogLine(m.stream, msg.gen)
 
 	case logStreamErrMsg:
@@ -264,6 +269,7 @@ func (m *Model) ensureStreamForCursor() tea.Cmd {
 	m.logErr = nil
 	m.logGen++
 	gen := m.logGen
+	m.refreshLogViewport()
 
 	stream, err := startLogStream(target.ID, tailLines)
 	if err != nil {
@@ -300,13 +306,30 @@ func waitForLogLine(stream *logStream, gen int) tea.Cmd {
 	}
 }
 
-func joinLines(lines []string) string {
-	out := ""
-	for i, l := range lines {
-		if i > 0 {
-			out += "\n"
-		}
-		out += l
+// refreshLogViewport reconstruye el contenido visible del panel de logs a
+// partir de m.logLines, envolviendo (wrap) cada línea al ancho actual del
+// viewport. bubbles/viewport cuenta líneas lógicas (separadas por \n) para su
+// scroll, pero lipgloss/la terminal NO envuelven líneas largas por su cuenta
+// — si no hacemos el wrap acá, una línea de log más ancha que el panel
+// termina ocupando más de una fila visual en la terminal sin que el viewport
+// se entere, desbordando el alto calculado. Por eso se re-envuelve todo el
+// buffer completo en cada actualización (nueva línea o resize de la
+// terminal) en vez de ir concatenando wraps parciales.
+func (m *Model) refreshLogViewport() {
+	if !m.ready {
+		// Todavía no llegó el primer tea.WindowSizeMsg (viewport sin
+		// inicializar); no hay nada que dibujar todavía.
+		return
 	}
-	return out
+
+	width := m.viewport.Width
+	if width < 1 {
+		width = 1
+	}
+
+	atBottom := m.viewport.AtBottom()
+	m.viewport.SetContent(wrap.String(numberedLog(m.logLines), width))
+	if atBottom {
+		m.viewport.GotoBottom()
+	}
 }

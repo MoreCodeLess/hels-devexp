@@ -2,15 +2,16 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
 var (
-	headerStyle = lipgloss.NewStyle().
+	hintsBarStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("15")).
-			Background(lipgloss.Color("4")).
+			Foreground(lipgloss.Color("0")).
+			Background(lipgloss.Color("2")).
 			Padding(0, 1)
 
 	paneStyle = lipgloss.NewStyle().
@@ -31,6 +32,8 @@ var (
 	statusOKStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	statusDimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	lineNumStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("135"))
+	sepStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 )
 
 func (m *Model) View() string {
@@ -38,14 +41,14 @@ func (m *Model) View() string {
 		return "cargando...\n"
 	}
 
-	header := headerStyle.Render(" hels dashboard — click o j/k elige servicio · Tab cambia de panel · click/rueda en logs para scrollear · q sale ")
+	hints := hintsBarStyle.Render(" hels dashboard — click o j/k elige servicio · Tab cambia de panel · click/rueda en logs para scrollear · q sale ")
 
 	list := m.renderList()
 	logs := m.renderLogs()
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, logs)
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, body)
+	return lipgloss.JoinVertical(lipgloss.Left, body, hints)
 }
 
 func (m *Model) renderList() string {
@@ -96,7 +99,7 @@ func (m *Model) renderLogs() string {
 
 	return style.
 		Width(m.viewport.Width).
-		Height(m.viewport.Height).
+		Height(m.viewport.Height + paneTitleLines).
 		Render(content)
 }
 
@@ -111,4 +114,16 @@ func padRight(s string, n int) string {
 		s += " "
 	}
 	return s
+}
+
+// numberedLog arma el texto de los logs con número de línea (1-based) y un
+// separador, coloreados, antes de que se envuelva (wrap) al ancho del panel.
+func numberedLog(lines []string) string {
+	out := make([]string, len(lines))
+	sep := sepStyle.Render("│")
+	for i, l := range lines {
+		num := lineNumStyle.Render(fmt.Sprintf("%4d", i+1))
+		out[i] = num + " " + sep + " " + l
+	}
+	return strings.Join(out, "\n")
 }
