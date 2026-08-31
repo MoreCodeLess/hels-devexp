@@ -5,7 +5,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/muesli/reflow/wrap"
 )
 
 const (
@@ -330,14 +329,16 @@ func waitForLogLines(stream *logStream, gen int) tea.Cmd {
 }
 
 // refreshLogViewport reconstruye el contenido visible del panel de logs a
-// partir de m.logLines, envolviendo (wrap) cada línea al ancho actual del
-// viewport. bubbles/viewport cuenta líneas lógicas (separadas por \n) para su
-// scroll, pero lipgloss/la terminal NO envuelven líneas largas por su cuenta
-// — si no hacemos el wrap acá, una línea de log más ancha que el panel
-// termina ocupando más de una fila visual en la terminal sin que el viewport
-// se entere, desbordando el alto calculado. Por eso se re-envuelve todo el
-// buffer completo en cada actualización (nueva línea o resize de la
-// terminal) en vez de ir concatenando wraps parciales.
+// partir de m.logLines. Ojo: NO se envuelven (wrap) las líneas largas a
+// propósito. bubbles/viewport ya corta cada línea lógica a su ancho visible
+// con ansi.Cut (ver Model.visibleLines) en vez de partirla en varias filas,
+// así que 1 línea de m.logLines siempre ocupa exactamente 1 fila visual —
+// eso es lo que mantiene la cuenta de alto (paneTitleLines, etc.) exacta sin
+// importar qué tan larga sea una línea. El wrap manual que había antes
+// rompía justo esa invariante (una línea larga terminaba en 2+ filas reales
+// sin que el viewport se enterara) y encima duplicaba lo que el viewport ya
+// hace solo. Para ver el texto que queda fuera del panel, el viewport trae
+// scroll horizontal nativo (ScrollLeft/ScrollRight, teclas h/l o ←/→).
 func (m *Model) refreshLogViewport() {
 	if !m.ready {
 		// Todavía no llegó el primer tea.WindowSizeMsg (viewport sin
@@ -345,13 +346,8 @@ func (m *Model) refreshLogViewport() {
 		return
 	}
 
-	width := m.viewport.Width
-	if width < 1 {
-		width = 1
-	}
-
 	atBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(wrap.String(numberedLog(m.logLines), width))
+	m.viewport.SetContent(numberedLog(m.logLines))
 	if atBottom {
 		m.viewport.GotoBottom()
 	}

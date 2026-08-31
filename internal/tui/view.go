@@ -41,7 +41,7 @@ func (m *Model) View() string {
 		return "cargando...\n"
 	}
 
-	hints := hintsBarStyle.Render(" hels dashboard — click o j/k elige servicio · Tab cambia de panel · click/rueda en logs para scrollear · q sale ")
+	hints := hintsBarStyle.Render(" hels dashboard — click o j/k elige servicio · Tab cambia de panel · rueda/pgup/pgdn scrollea vertical · h/l o ←/→ scrollea horizontal · q sale ")
 
 	list := m.renderList()
 	logs := m.renderLogs()
