@@ -12,16 +12,22 @@ const (
 	maxLogLines  = 2000
 	refreshEvery = 3 * time.Second
 
-	// Layout: el header ocupa 1 fila; cada panel (lista y logs) agrega
-	// borde+padding (paneChrome) alrededor de su contenido. listItemsTopRow y
-	// listPaneOuterWidth se usan tanto para dibujar (view.go) como para
-	// traducir un click de mouse a fila/columna (hitTestList más abajo) — si
-	// se cambia el layout en uno hay que actualizar el otro.
-	paneChrome         = 4 // borde (1+1) + padding horizontal (1+1)
+	// Layout: estas constantes describen el presupuesto vertical/horizontal
+	// exacto que consume cada elemento de chrome (todo lo que no es
+	// contenido real), para que el alto total nunca exceda la terminal
+	// (lipgloss NO trunca contenido más alto que el Height() pedido, así que
+	// cualquier desfase acá desborda el alt-screen). listItemsTopRow y
+	// listPaneOuterWidth también se usan para traducir un click de mouse a
+	// fila/columna (hitTestList más abajo) — si se cambia el layout en un
+	// lado hay que actualizar el otro.
+	outerHeaderLines = 1 // la barra azul de arriba
+	paneBorderLines  = 2 // borde de cada panel: arriba + abajo
+	paneTitleLines   = 2 // "TÍTULO" + línea en blanco, dentro de cada panel
+	paneChrome       = 4 // borde (1+1) + padding horizontal (1+1) de cada panel
+
 	listPaneWidth      = 28
 	listPaneOuterWidth = listPaneWidth + paneChrome
-	listItemsTopRow    = 4 // header(1) + borde-top(1) + título(1) + blanco(1)
-	headerHeight       = 3
+	listItemsTopRow    = outerHeaderLines + 1 + paneTitleLines // + 1 = borde-top
 )
 
 // focusArea indica qué panel recibe el teclado y el scroll en este momento.
@@ -103,7 +109,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		vpWidth := msg.Width - listPaneWidth - 2*paneChrome
-		vpHeight := msg.Height - headerHeight
+		vpHeight := msg.Height - outerHeaderLines - paneBorderLines - paneTitleLines
 		if vpWidth < 1 {
 			vpWidth = 1
 		}

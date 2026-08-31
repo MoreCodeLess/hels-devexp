@@ -74,7 +74,7 @@ func (m *Model) renderList() string {
 
 	return style.
 		Width(listPaneWidth).
-		Height(m.viewport.Height).
+		Height(m.viewport.Height + paneTitleLines).
 		Render(content)
 }
 
