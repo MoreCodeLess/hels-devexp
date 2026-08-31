@@ -8,11 +8,28 @@ import (
 )
 
 const (
-	tailLines      = 200
-	maxLogLines    = 2000
-	refreshEvery   = 3 * time.Second
-	listPaneWidth  = 28
-	headerHeight   = 3
+	tailLines    = 200
+	maxLogLines  = 2000
+	refreshEvery = 3 * time.Second
+
+	// Layout: el header ocupa 1 fila; cada panel (lista y logs) agrega
+	// borde+padding (paneChrome) alrededor de su contenido. listItemsTopRow y
+	// listPaneOuterWidth se usan tanto para dibujar (view.go) como para
+	// traducir un click de mouse a fila/columna (hitTestList más abajo) — si
+	// se cambia el layout en uno hay que actualizar el otro.
+	paneChrome         = 4 // borde (1+1) + padding horizontal (1+1)
+	listPaneWidth      = 28
+	listPaneOuterWidth = listPaneWidth + paneChrome
+	listItemsTopRow    = 4 // header(1) + borde-top(1) + título(1) + blanco(1)
+	headerHeight       = 3
+)
+
+// focusArea indica qué panel recibe el teclado y el scroll en este momento.
+type focusArea int
+
+const (
+	focusList focusArea = iota
+	focusLogs
 )
 
 type containersLoadedMsg struct {
@@ -39,6 +56,7 @@ type Model struct {
 	containers []Container
 	cursor     int
 	selectedID string
+	focus      focusArea
 
 	logLines []string
 	logGen   int
@@ -84,7 +102,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		vpWidth := msg.Width - listPaneWidth - 3
+		vpWidth := msg.Width - listPaneWidth - 2*paneChrome
 		vpHeight := msg.Height - headerHeight
 		if vpWidth < 1 {
 			vpWidth = 1
@@ -145,30 +163,82 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			m.stopStream()
 			return m, tea.Quit
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-				return m, m.ensureStreamForCursor()
-			}
+		case "tab":
+			m.toggleFocus()
 			return m, nil
-		case "down", "j":
-			if m.cursor < len(m.containers)-1 {
-				m.cursor++
-				return m, m.ensureStreamForCursor()
+		}
+
+		if m.focus == focusList {
+			switch msg.String() {
+			case "up", "k":
+				if m.cursor > 0 {
+					m.cursor--
+					return m, m.ensureStreamForCursor()
+				}
+			case "down", "j":
+				if m.cursor < len(m.containers)-1 {
+					m.cursor++
+					return m, m.ensureStreamForCursor()
+				}
 			}
 			return m, nil
 		}
-		// cualquier otra tecla (pgup, pgdown, home, end, ctrl+u/d, ...) se la
-		// pasamos al viewport para que scrollee los logs.
+		// focusLogs: cualquier tecla (arriba/abajo/j/k, pgup/pgdn, home/end,
+		// ctrl+u/d, ...) se la pasamos directo al viewport para que scrollee.
 
 	case tea.MouseMsg:
-		// la rueda del mouse también scrollea el panel de logs, nunca cambia
-		// el servicio seleccionado.
+		switch {
+		case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
+			if idx, ok := m.hitTestList(msg.X, msg.Y); ok {
+				m.focus = focusList
+				m.cursor = idx
+				return m, m.ensureStreamForCursor()
+			}
+			m.focus = focusLogs
+			return m, nil
+
+		case msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown:
+			// la rueda scrollea los logs según dónde esté el mouse, sin
+			// depender de qué panel tenga el foco del teclado ni tocar la
+			// lista de servicios.
+			if msg.X < listPaneOuterWidth {
+				return m, nil
+			}
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 	}
 
+	if m.focus != focusLogs {
+		return m, nil
+	}
 	var cmd tea.Cmd
 	m.viewport, cmd = m.viewport.Update(msg)
 	return m, cmd
+}
+
+func (m *Model) toggleFocus() {
+	if m.focus == focusList {
+		m.focus = focusLogs
+	} else {
+		m.focus = focusList
+	}
+}
+
+// hitTestList traduce coordenadas de mouse a un índice de la lista de
+// servicios. Devuelve ok=false si el click cayó fuera del panel de lista o
+// sobre una fila sin servicio.
+func (m *Model) hitTestList(x, y int) (int, bool) {
+	if x < 0 || x >= listPaneOuterWidth {
+		return 0, false
+	}
+	idx := y - listItemsTopRow
+	if idx < 0 || idx >= len(m.containers) {
+		return 0, false
+	}
+	return idx, true
 }
 
 // ensureStreamForCursor arranca el stream de logs del contenedor bajo el

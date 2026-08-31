@@ -18,6 +18,9 @@ var (
 			BorderForeground(lipgloss.Color("240")).
 			Padding(0, 1)
 
+	focusedPaneStyle = paneStyle.
+				BorderForeground(lipgloss.Color("62"))
+
 	selectedItemStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("15")).
@@ -25,8 +28,9 @@ var (
 
 	itemStyle = lipgloss.NewStyle()
 
-	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	errStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	statusOKStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	statusDimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )
 
 func (m *Model) View() string {
@@ -34,7 +38,7 @@ func (m *Model) View() string {
 		return "cargando...\n"
 	}
 
-	header := headerStyle.Render(" hels dashboard — j/k o ↑/↓ para elegir servicio, q para salir ")
+	header := headerStyle.Render(" hels dashboard — click o j/k elige servicio · Tab cambia de panel · click/rueda en logs para scrollear · q sale ")
 
 	list := m.renderList()
 	logs := m.renderLogs()
@@ -50,19 +54,25 @@ func (m *Model) renderList() string {
 	if m.err != nil {
 		content += errStyle.Render(fmt.Sprintf("error: %v", m.err)) + "\n"
 	} else if len(m.containers) == 0 {
-		content += statusStyle.Render("(sin contenedores corriendo)") + "\n"
+		content += statusDimStyle.Render("(sin contenedores corriendo)") + "\n"
 	}
 
 	for i, c := range m.containers {
-		line := fmt.Sprintf("%s\n%s", c.Name, statusStyle.Render(c.Status))
+		dot := statusOKStyle.Render("●")
+		line := fmt.Sprintf("%s %s", dot, c.Name)
 		if i == m.cursor {
-			content += selectedItemStyle.Render(line) + "\n"
+			content += selectedItemStyle.Render(padRight(line, listPaneWidth)) + "\n"
 		} else {
 			content += itemStyle.Render(line) + "\n"
 		}
 	}
 
-	return paneStyle.
+	style := paneStyle
+	if m.focus == focusList {
+		style = focusedPaneStyle
+	}
+
+	return style.
 		Width(listPaneWidth).
 		Height(m.viewport.Height).
 		Render(content)
@@ -79,8 +89,26 @@ func (m *Model) renderLogs() string {
 		content += "\n" + errStyle.Render(fmt.Sprintf("stream de logs terminó: %v", m.logErr))
 	}
 
-	return paneStyle.
+	style := paneStyle
+	if m.focus == focusLogs {
+		style = focusedPaneStyle
+	}
+
+	return style.
 		Width(m.viewport.Width).
 		Height(m.viewport.Height).
 		Render(content)
+}
+
+// padRight rellena s con espacios hasta n runas, para que el resaltado de
+// selección cubra todo el ancho de la fila y no solo el texto.
+func padRight(s string, n int) string {
+	pad := n - len([]rune(s))
+	if pad <= 0 {
+		return s
+	}
+	for i := 0; i < pad; i++ {
+		s += " "
+	}
+	return s
 }
