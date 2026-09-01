@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
+	hlenv "github.com/MoreCodeLess/hels-devexp/internal/env"
 	"github.com/MoreCodeLess/hels-devexp/internal/tui"
 )
 
@@ -31,8 +32,9 @@ dónde esté el cursor, sin depender del foco. "r" reinicia el proceso
 seleccionado. Salí con q (para todos los procesos locales antes de cerrar).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		specs := loadProcessSpecs()
+		endpoint := loadLambdaEndpoint()
 
-		m := tui.New(specs)
+		m := tui.New(specs, endpoint)
 		p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 		m.AttachProgram(p)
 
@@ -65,6 +67,44 @@ func loadProcessSpecs() []tui.ProcessSpec {
 		specs = append(specs, tui.ProcessSpec{Name: name, Cmd: p.Cmd, Dir: p.Dir})
 	}
 	return specs
+}
+
+// loadLambdaEndpoint busca, entre los entornos declarados en hels.yaml, uno
+// que esté corriendo ahora mismo, y devuelve su URL para que el dashboard
+// pueda listar sus funciones Lambda. Prioriza el entorno "activo" (el que
+// dejó `hels env switch`); si no hay ninguno activo pero igual hay uno
+// corriendo, usa ese. Devuelve "" si no hay hels.yaml, no declara ningún
+// entorno, o ninguno está arriba — el dashboard funciona igual, solo sin la
+// sección de Lambdas.
+func loadLambdaEndpoint() string {
+	cfg, err := loadProjectConfig()
+	if err != nil {
+		return ""
+	}
+
+	statuses, err := hlenv.List(cfg)
+	if err != nil {
+		return ""
+	}
+
+	state, _ := hlenv.LoadState()
+
+	var firstRunning *hlenv.Status
+	for _, st := range statuses {
+		if !st.Running {
+			continue
+		}
+		if state != nil && st.Name == state.Active {
+			return st.EndpointURL()
+		}
+		if firstRunning == nil {
+			firstRunning = st
+		}
+	}
+	if firstRunning != nil {
+		return firstRunning.EndpointURL()
+	}
+	return ""
 }
 
 func init() {

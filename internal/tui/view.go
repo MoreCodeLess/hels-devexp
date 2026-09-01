@@ -63,8 +63,11 @@ func (m *Model) renderList() string {
 	// índice de la lista (ver el comentario ahí).
 	for i, it := range m.items {
 		icon := "▶" // proceso local (declarado en hels.yaml)
-		if it.kind == kindContainer {
+		switch it.kind {
+		case kindContainer:
 			icon = "●" // contenedor de infra (Docker)
+		case kindLambda:
+			icon = "λ" // función Lambda desplegada contra floci
 		}
 		dotStyle := statusOKStyle
 		if !it.ok {
@@ -99,8 +102,11 @@ func (m *Model) renderLogs() string {
 	title := "LOGS"
 	if len(m.items) > 0 && m.cursor < len(m.items) {
 		kind := "proceso"
-		if m.items[m.cursor].kind == kindContainer {
+		switch m.items[m.cursor].kind {
+		case kindContainer:
 			kind = "contenedor"
+		case kindLambda:
+			kind = "lambda"
 		}
 		title = fmt.Sprintf("LOGS — %s (%s)", m.items[m.cursor].name, kind)
 	}

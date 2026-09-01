@@ -140,6 +140,27 @@ terminal aparte.
 - `r` reinicia el proceso seleccionado (no aplica a contenedores de infra — esos se manejan con `hels env`).
 - `q` sale, parando primero todos los procesos locales (no deja nada huérfano corriendo).
 
+La lista de infra solo muestra contenedores que `hels` gestiona (floci y lo
+que venga después) — no todo lo que esté corriendo en Docker en tu máquina.
+
+**Funciones Lambda (`λ`)**: si el entorno declarado en `hels.yaml` está
+arriba, el dashboard le pregunta a floci qué funciones tiene desplegadas y
+las suma a la lista, con su estado (si floci tiene ahora mismo un contenedor
+"caliente" corriendo para esa función, o "sin invocaciones recientes" si no).
+Seleccionar una muestra los logs de ese contenedor en vivo, y si floci lo
+recicla (por inactividad) o crea uno nuevo, el dashboard se reengancha solo
+al que esté vivo.
+
+Ojo con el alcance real hoy: floci **no vuelca la salida de la ejecución de
+la función** (console.log, stack traces) a ningún lado accesible — ni a
+CloudWatch Logs (crea el log group/stream pero nunca les carga contenido) ni
+al `docker logs` del propio contenedor de la invocación (confirmado
+probando varias invocaciones reales). Así que hoy esta vista sirve sobre
+todo para saber **si tu función está siendo invocada y sigue "caliente"**,
+no todavía para ver su output — es un límite de floci, no de `hels`, y esta
+pieza queda lista para heredar esos logs el día que floci los exponga de
+verdad.
+
 ## Desarrollo
 
 ```bash

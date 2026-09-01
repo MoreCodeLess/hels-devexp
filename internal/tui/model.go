@@ -50,6 +50,7 @@ type itemKind int
 const (
 	kindProcess itemKind = iota
 	kindContainer
+	kindLambda
 )
 
 // listItem es una fila de la lista: o un proceso local (declarado en
@@ -79,6 +80,13 @@ type procEntry struct {
 type containersLoadedMsg struct {
 	containers []Container
 	err        error
+}
+
+// lambdasLoadedMsg trae la lista de funciones Lambda desplegadas contra el
+// entorno floci activo (si hay uno declarado en hels.yaml y corriendo).
+type lambdasLoadedMsg struct {
+	functions []LambdaFunction
+	err       error
 }
 
 type refreshTickMsg time.Time
@@ -123,13 +131,25 @@ type Model struct {
 	selectedKey string
 	focus       focusArea
 
-	// Estado del stream de logs de un CONTENEDOR seleccionado (on-demand: se
-	// arranca al seleccionar, se para al deseleccionar). Los procesos no
-	// usan esto — su buffer vive en procEntry.lines.
+	// lambdaEndpoint es la URL de floci contra la que preguntamos qué
+	// funciones Lambda hay desplegadas ("" si no hay hels.yaml o ningún
+	// entorno declarado está corriendo — en ese caso no se muestra la
+	// sección de Lambdas).
+	lambdaEndpoint string
+	lambdas        []LambdaFunction
+
+	// Estado del stream de logs de un CONTENEDOR o LAMBDA seleccionado
+	// (on-demand: se arranca al seleccionar, se para al deseleccionar). Los
+	// procesos no usan esto — su buffer vive en procEntry.lines. Para una
+	// Lambda, streamContainerID es el contenedor Docker efímero que floci
+	// tiene corriendo AHORA para esa función (puede cambiar de identidad
+	// mientras está seleccionada, si el warm pool de floci lo recicla — ver
+	// refreshLambdaStream).
 	containerLogLines []string
 	containerLogGen   int
 	containerStream   *logStream
 	containerLogErr   error
+	streamContainerID string
 
 	viewport viewport.Model
 	ready    bool
@@ -141,9 +161,11 @@ type Model struct {
 // New crea el modelo inicial del dashboard. specs son los procesos locales
 // declarados en hels.yaml (processes.*) — puede ser nil/vacío si no hay
 // hels.yaml o no declara ninguno; el dashboard sigue funcionando mostrando
-// solo la infraestructura Docker.
-func New(specs []ProcessSpec) *Model {
-	return &Model{processSpecs: specs}
+// solo la infraestructura Docker. lambdaEndpoint es la URL del floci activo
+// (ej. "http://localhost:4566") para listar sus funciones Lambda — "" si no
+// hay ninguno corriendo, en cuyo caso esa sección del dashboard no aparece.
+func New(specs []ProcessSpec, lambdaEndpoint string) *Model {
+	return &Model{processSpecs: specs, lambdaEndpoint: lambdaEndpoint}
 }
 
 // AttachProgram le da al modelo una referencia al *tea.Program que lo corre,
@@ -155,6 +177,9 @@ func (m *Model) AttachProgram(p *tea.Program) {
 
 func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{loadContainersCmd(), tickCmd()}
+	if m.lambdaEndpoint != "" {
+		cmds = append(cmds, loadLambdasCmd(m.lambdaEndpoint))
+	}
 	cmds = append(cmds, m.startAllProcesses()...)
 	return tea.Batch(cmds...)
 }
@@ -216,6 +241,23 @@ func (m *Model) rebuildItems() {
 		})
 	}
 
+	if len(m.lambdas) > 0 {
+		// Una sola consulta a Docker para todas las Lambdas, en vez de una
+		// por función (ver matchLambdaContainer).
+		lambdaContainers, _ := listLambdaContainers()
+		for _, fn := range m.lambdas {
+			status := "sin invocaciones recientes"
+			ok := false
+			if c, found := matchLambdaContainer(lambdaContainers, fn.Name); found {
+				status = c.Status
+				ok = true
+			}
+			items = append(items, listItem{
+				kind: kindLambda, key: "lambda:" + fn.Name, name: fn.Name, status: status, ok: ok,
+			})
+		}
+	}
+
 	m.items = items
 	if m.cursor >= len(m.items) {
 		m.cursor = maxInt(0, len(m.items)-1)
@@ -233,6 +275,13 @@ func loadContainersCmd() tea.Cmd {
 	return func() tea.Msg {
 		cs, err := listContainers()
 		return containersLoadedMsg{containers: cs, err: err}
+	}
+}
+
+func loadLambdasCmd(endpoint string) tea.Cmd {
+	return func() tea.Msg {
+		fns, err := listLambdaFunctions(endpoint)
+		return lambdasLoadedMsg{functions: fns, err: err}
 	}
 }
 
@@ -273,8 +322,26 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildItems()
 		return m, m.ensureSelection()
 
+	case lambdasLoadedMsg:
+		if msg.err == nil {
+			m.lambdas = msg.functions
+		}
+		m.rebuildItems()
+		return m, m.ensureSelection()
+
 	case refreshTickMsg:
-		return m, tea.Batch(loadContainersCmd(), tickCmd())
+		cmds := []tea.Cmd{loadContainersCmd(), tickCmd()}
+		if m.lambdaEndpoint != "" {
+			cmds = append(cmds, loadLambdasCmd(m.lambdaEndpoint))
+		}
+		// Si lo seleccionado es una Lambda, el contenedor efímero que muestra
+		// pudo haber cambiado de identidad (floci lo recicló por inactividad
+		// y lo volvió a crear en otra invocación) o haber aparecido/
+		// desaparecido — hay que re-engancharse al que esté vivo ahora.
+		if cmd := m.refreshSelectedLambdaStream(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
 
 	case logLinesMsg:
 		if msg.gen != m.containerLogGen {
@@ -433,12 +500,36 @@ func (m *Model) ensureSelection() tea.Cmd {
 		return nil
 	}
 
+	if target.kind == kindLambda {
+		name := strings.TrimPrefix(target.key, "lambda:")
+		containers, _ := listLambdaContainers()
+		c, found := matchLambdaContainer(containers, name)
+		if !found {
+			m.streamContainerID = ""
+			m.containerLogLines = []string{lambdaColdMessage}
+			m.containerLogErr = nil
+			m.refreshLogViewport()
+			return nil
+		}
+		return m.startContainerStream(c.ID)
+	}
+
+	// kindContainer: la key ya es el ID del contenedor.
+	return m.startContainerStream(target.key)
+}
+
+// startContainerStream arranca "docker logs -f" para el contenedor id y lo
+// deja como el stream on-demand activo (usado tanto para infra como para el
+// contenedor efímero de una Lambda). streamContainerID queda registrado para
+// que refreshSelectedLambdaStream pueda notar si cambia de identidad.
+func (m *Model) startContainerStream(id string) tea.Cmd {
 	m.containerLogLines = nil
 	m.containerLogErr = nil
 	m.containerLogGen++
 	gen := m.containerLogGen
+	m.streamContainerID = id
 
-	stream, err := startLogStream(target.key, tailLines)
+	stream, err := startLogStream(id, tailLines)
 	if err != nil {
 		m.containerLogErr = err
 		m.refreshLogViewport()
@@ -450,12 +541,53 @@ func (m *Model) ensureSelection() tea.Cmd {
 	return waitForLogLines(stream, gen)
 }
 
+// refreshSelectedLambdaStream se llama en cada refreshTick. Si lo
+// seleccionado es una Lambda, floci puede haber reciclado su contenedor
+// efímero (warm pool) desde la última vez: mismo nombre de función, otro
+// container ID, o directamente ninguno. Si detecta un cambio, reengancha el
+// stream al contenedor vivo actual (o muestra el mensaje de "función fría"
+// si ya no hay ninguno).
+func (m *Model) refreshSelectedLambdaStream() tea.Cmd {
+	if len(m.items) == 0 || m.cursor >= len(m.items) {
+		return nil
+	}
+	item := m.items[m.cursor]
+	if item.kind != kindLambda {
+		return nil
+	}
+
+	name := strings.TrimPrefix(item.key, "lambda:")
+	containers, _ := listLambdaContainers()
+	c, found := matchLambdaContainer(containers, name)
+
+	switch {
+	case found && c.ID == m.streamContainerID:
+		return nil // sigue siendo el mismo contenedor, no hay nada que hacer
+	case found:
+		m.stopContainerStream()
+		return m.startContainerStream(c.ID)
+	case m.streamContainerID != "":
+		// Tenía un contenedor y ya no está (floci lo bajó por inactividad).
+		m.stopContainerStream()
+		m.streamContainerID = ""
+		m.containerLogLines = []string{lambdaColdMessage}
+		m.refreshLogViewport()
+	}
+	return nil
+}
+
 func (m *Model) stopContainerStream() {
 	if m.containerStream != nil {
 		m.containerStream.Stop()
 		m.containerStream = nil
 	}
+	m.streamContainerID = ""
 }
+
+// lambdaColdMessage se muestra en el panel de logs cuando se selecciona una
+// Lambda que no tiene ningún contenedor "caliente" corriendo ahora mismo
+// (floci lo bajó por inactividad, o todavía no se invocó nunca).
+const lambdaColdMessage = "(sin invocaciones activas ahora mismo — invocá la función para ver sus logs acá; el dashboard se reengancha solo)"
 
 // restartSelected mata y vuelve a arrancar el proceso seleccionado (como el
 // "r" de mprocs). No hace nada si lo seleccionado es un contenedor de

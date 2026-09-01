@@ -19,9 +19,13 @@ type Container struct {
 
 const psFormat = "{{.ID}}\t{{.Names}}\t{{.Status}}"
 
-// listContainers corre "docker ps" y devuelve los contenedores en ejecución.
+// listContainers corre "docker ps" y devuelve los contenedores de infra que
+// hels gestiona (label hels.managed=true, puesta por "hels env up"). No
+// mostramos TODO lo que corre en Docker en la máquina a propósito: eso
+// entierra el contenedor que importa (floci) en el ruido de cualquier otro
+// contenedor suelto que haya quedado corriendo de antes.
 func listContainers() ([]Container, error) {
-	out, err := exec.Command("docker", "ps", "--format", psFormat).Output()
+	out, err := exec.Command("docker", "ps", "--filter", "label=hels.managed=true", "--format", psFormat).Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			return nil, fmt.Errorf("docker ps: %s", strings.TrimSpace(string(exitErr.Stderr)))
