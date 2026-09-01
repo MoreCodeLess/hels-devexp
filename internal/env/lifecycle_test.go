@@ -35,6 +35,7 @@ func TestRunArgsMemoryStorage(t *testing.T) {
 		"--label hels.project=mi-servicio",
 		"--label hels.environment=dev",
 		"-p 4566:4566",
+		"-v /var/run/docker.sock:/var/run/docker.sock",
 		"-e FLOCI_DEFAULT_REGION=us-east-1",
 		"-e FLOCI_DEFAULT_ACCOUNT_ID=000000000000",
 		"-e FLOCI_STORAGE_MODE=memory",

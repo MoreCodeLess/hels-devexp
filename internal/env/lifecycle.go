@@ -84,6 +84,13 @@ func runArgs(project, envName string, envCfg config.Environment) ([]string, erro
 		"--label", labelProject + "=" + project,
 		"--label", labelEnv + "=" + envName,
 		"-p", fmt.Sprintf("%d:%d", envCfg.Port, flociPort),
+		// Docker-outside-of-Docker: floci corre Lambda, ECS, RDS, ElastiCache,
+		// etc. como contenedores Docker reales (no los simula en proceso), así
+		// que necesita hablar con el Docker del host para poder levantarlos.
+		// Sin este mount, "create-function" funciona (floci solo guarda
+		// metadata) pero "invoke" falla al intentar arrancar el contenedor del
+		// runtime — confirmado en pruebas reales contra el proyecto TaskFlow.
+		"-v", "/var/run/docker.sock:/var/run/docker.sock",
 		"-e", "FLOCI_DEFAULT_REGION=" + envCfg.Region,
 		"-e", "FLOCI_DEFAULT_ACCOUNT_ID=" + envCfg.AccountID,
 		"-e", "FLOCI_STORAGE_MODE=" + string(envCfg.Storage.Mode),
