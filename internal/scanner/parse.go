@@ -23,8 +23,9 @@ func ParseFile(path string) (*ServiceDef, error) {
 	}
 
 	svc := &ServiceDef{
-		Name: serviceName(doc, path),
-		Path: path,
+		Name:    serviceName(doc, path),
+		Path:    path,
+		Runtime: providerRuntime(doc),
 	}
 
 	svc.Functions = parseFunctions(doc)
@@ -33,6 +34,15 @@ func ParseFile(path string) (*ServiceDef, error) {
 	svc.References = findReferences(doc)
 
 	return svc, nil
+}
+
+func providerRuntime(doc map[string]interface{}) string {
+	provider, ok := doc["provider"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	runtime, _ := provider["runtime"].(string)
+	return runtime
 }
 
 func serviceName(doc map[string]interface{}, path string) string {
@@ -145,6 +155,7 @@ func parseResources(doc map[string]interface{}) []Resource {
 			res.Type = t
 		}
 		if props, ok := def["Properties"].(map[string]interface{}); ok {
+			res.Properties = props
 			for _, prop := range literalNameProps {
 				if name, ok := props[prop].(string); ok {
 					res.Name = name

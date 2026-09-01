@@ -24,6 +24,11 @@ type Resource struct {
 	// Name es el nombre literal del recurso si se pudo extraer de sus
 	// Properties (QueueName, TopicName, TableName, BucketName, ...).
 	Name string `json:"name,omitempty"`
+	// Properties son las Properties crudas del recurso, tal como las parseó
+	// yaml.Unmarshal. internal/deploy las usa para crear el recurso de verdad
+	// (ej. AttributeDefinitions/KeySchema de una tabla DynamoDB) sin que este
+	// paquete tenga que modelar el schema completo de cada tipo de recurso.
+	Properties map[string]interface{} `json:"properties,omitempty"`
 }
 
 // Export es un output de CloudFormation exportado (resources.Outputs.*.Export.Name),
@@ -48,8 +53,11 @@ type Reference struct {
 
 // ServiceDef es todo lo que se pudo extraer de un serverless.yml.
 type ServiceDef struct {
-	Name       string      `json:"name"`
-	Path       string      `json:"path"`
+	Name string `json:"name"`
+	Path string `json:"path"`
+	// Runtime es provider.runtime (ej. "nodejs20.x"). internal/deploy lo usa
+	// para saber cómo empaquetar y correr las funciones.
+	Runtime    string      `json:"runtime,omitempty"`
 	Functions  []Function  `json:"functions,omitempty"`
 	Resources  []Resource  `json:"resources,omitempty"`
 	Exports    []Export    `json:"exports,omitempty"`

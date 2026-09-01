@@ -78,6 +78,35 @@ servicios de floci que hacen falta para simular todo lo que se detectó
 CloudFormation). Es un punto de partida para revisar, no una verdad
 absoluta — pero ya es cargable directo por `hels env`.
 
+### Deploy real contra floci
+
+```bash
+hels deploy ./mi-monorepo            # crea todo contra el entorno "dev"
+hels deploy ./mi-monorepo --env qa   # contra otro entorno declarado en hels.yaml
+```
+
+Escanea la ruta (igual que `hels scan`) y crea, contra floci, los recursos de
+verdad: funciones Lambda (empaquetando el handler), colas SQS, tópicos SNS,
+tablas DynamoDB y buckets S3. Requiere el **AWS CLI** instalado — `hels
+deploy` habla con floci a través de él en vez de reimplementar la API de AWS.
+
+**A propósito no pasa por CloudFormation** (que es lo que hace `serverless
+deploy` por dentro): se probó ese camino contra floci y tiene un bug real —
+la traducción de CloudFormation a Lambda falla con "Handler file ... not
+found" incluso con el paquete armado bien. Yendo directo a la API de cada
+servicio se evita ese problema por completo, y de paso no hace falta tener
+Node.js/npm/`serverless-localstack` instalados.
+
+Recursos que todavía no crea (API Gateway, Cognito, ElastiCache, ECS, ...) se
+listan al final de la corrida como "salteados" — no se ignoran en silencio.
+Para exponer una función por HTTP hoy, apuntá tu gateway (ej.
+[KrakenD](https://www.krakend.io/)) directo al endpoint de invocación de
+Lambda que ya expone floci sin necesitar autenticación:
+
+```
+POST http://localhost:4566/2015-03-31/functions/<nombre-de-la-función>/invocations
+```
+
 ## Desarrollo
 
 ```bash
