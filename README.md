@@ -57,9 +57,10 @@ el entorno ya está corriendo, no hacen nada. El entorno "activo" (el que usa
 ### Escanear servicios de Serverless Framework
 
 ```bash
-hels scan ./mi-monorepo                    # texto legible (default)
-hels scan ./mi-monorepo --format mermaid   # diagrama Mermaid
-hels scan ./mi-monorepo --format json      # grafo completo en JSON
+hels scan ./mi-monorepo                          # texto legible (default)
+hels scan ./mi-monorepo --format mermaid         # diagrama Mermaid
+hels scan ./mi-monorepo --format json            # grafo completo en JSON
+hels scan ./mi-monorepo --format hels-yaml > hels.yaml   # genera un hels.yaml de partida
 ```
 
 Recorre la ruta buscando `serverless.yml`/`serverless.yaml` (salteando
@@ -70,6 +71,12 @@ tres vías, de más a menos confiable:
 1. `${cf:otro-stack.Output}` — referencia explícita a un output de otro stack de CloudFormation.
 2. `Fn::ImportValue` — contra lo que otro servicio exporta (`resources.Outputs.*.Export.Name`).
 3. ARNs/nombres literales — un ARN que menciona una cola/tabla/tópico/bucket que otro servicio declaró (`QueueName`, `TopicName`, `TableName`, `BucketName`). Es la más heurística de las tres: dos servicios podrían coincidir en nombre por casualidad.
+
+`--format hels-yaml` arma un `hels.yaml` de partida: un entorno `dev` con los
+servicios de floci que hacen falta para simular todo lo que se detectó
+(mirando los `events` de las funciones y los `Type` de los recursos de
+CloudFormation). Es un punto de partida para revisar, no una verdad
+absoluta — pero ya es cargable directo por `hels env`.
 
 ## Desarrollo
 
