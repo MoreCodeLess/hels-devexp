@@ -54,6 +54,23 @@ el entorno ya está corriendo, no hacen nada. El entorno "activo" (el que usa
 `switch`) se guarda en `.hels/state.json`, un archivo local **no versionado**
 (ver `.gitignore`) — `hels.yaml` sigue siendo 100% declarativo y reproducible.
 
+### Escanear servicios de Serverless Framework
+
+```bash
+hels scan ./mi-monorepo                    # texto legible (default)
+hels scan ./mi-monorepo --format mermaid   # diagrama Mermaid
+hels scan ./mi-monorepo --format json      # grafo completo en JSON
+```
+
+Recorre la ruta buscando `serverless.yml`/`serverless.yaml` (salteando
+`node_modules`, `.git`, `.serverless`, `vendor`), extrae funciones, eventos y
+recursos de cada servicio, y detecta conexiones reales entre servicios por
+tres vías, de más a menos confiable:
+
+1. `${cf:otro-stack.Output}` — referencia explícita a un output de otro stack de CloudFormation.
+2. `Fn::ImportValue` — contra lo que otro servicio exporta (`resources.Outputs.*.Export.Name`).
+3. ARNs/nombres literales — un ARN que menciona una cola/tabla/tópico/bucket que otro servicio declaró (`QueueName`, `TopicName`, `TableName`, `BucketName`). Es la más heurística de las tres: dos servicios podrían coincidir en nombre por casualidad.
+
 ## Desarrollo
 
 ```bash
