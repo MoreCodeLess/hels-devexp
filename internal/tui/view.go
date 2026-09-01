@@ -29,6 +29,7 @@ var (
 	itemStyle = lipgloss.NewStyle()
 
 	statusOKStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	statusBadStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	statusDimStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 )
@@ -38,7 +39,7 @@ func (m *Model) View() string {
 		return "cargando...\n"
 	}
 
-	hints := hintsBarStyle.Render(" hels dashboard — click o j/k elige servicio · Tab cambia de panel · rueda/pgup/pgdn scrollea vertical · h/l o ←/→ scrollea horizontal · q sale ")
+	hints := hintsBarStyle.Render(" hels dashboard — click o j/k elige · Tab cambia de panel · r reinicia el proceso · rueda/pgup/pgdn scrollea vertical · h/l scrollea horizontal · q sale ")
 
 	list := m.renderList()
 	logs := m.renderLogs()
@@ -53,17 +54,33 @@ func (m *Model) renderList() string {
 
 	if m.err != nil {
 		content += errStyle.Render(fmt.Sprintf("error: %v", m.err)) + "\n"
-	} else if len(m.containers) == 0 {
-		content += statusDimStyle.Render("(sin contenedores corriendo)") + "\n"
+	} else if len(m.items) == 0 {
+		content += statusDimStyle.Render("(nada corriendo todavía)") + "\n"
 	}
 
-	for i, c := range m.containers {
-		dot := statusOKStyle.Render("●")
-		line := fmt.Sprintf("%s %s", dot, c.Name)
+	// Cada ítem ocupa SIEMPRE 2 filas (nombre + estado), esté seleccionado o
+	// no — hitTestList asume ese ancho fijo para traducir un click a un
+	// índice de la lista (ver el comentario ahí).
+	for i, it := range m.items {
+		icon := "▶" // proceso local (declarado en hels.yaml)
+		if it.kind == kindContainer {
+			icon = "●" // contenedor de infra (Docker)
+		}
+		dotStyle := statusOKStyle
+		if !it.ok {
+			dotStyle = statusBadStyle
+		}
+		dot := dotStyle.Render(icon)
+
+		nameLine := fmt.Sprintf("%s %s", dot, it.name)
+		statusLine := "  " + it.status
+
 		if i == m.cursor {
-			content += selectedItemStyle.Render(padRight(line, listPaneWidth)) + "\n"
+			content += selectedItemStyle.Render(padRight(nameLine, listPaneWidth)) + "\n"
+			content += selectedItemStyle.Render(padRight(statusLine, listPaneWidth)) + "\n"
 		} else {
-			content += itemStyle.Render(line) + "\n"
+			content += itemStyle.Render(nameLine) + "\n"
+			content += statusDimStyle.Render(statusLine) + "\n"
 		}
 	}
 
@@ -80,16 +97,20 @@ func (m *Model) renderList() string {
 
 func (m *Model) renderLogs() string {
 	title := "LOGS"
-	if m.selectedID != "" && len(m.containers) > 0 {
-		title = fmt.Sprintf("LOGS — %s", m.containers[m.cursor].Name)
+	if len(m.items) > 0 && m.cursor < len(m.items) {
+		kind := "proceso"
+		if m.items[m.cursor].kind == kindContainer {
+			kind = "contenedor"
+		}
+		title = fmt.Sprintf("LOGS — %s (%s)", m.items[m.cursor].name, kind)
 	}
 
 	// Reservamos siempre 1 fila de estado (en blanco si no hay error), para
 	// que el contenido tenga la MISMA cantidad de filas sin importar si hay
 	// error o no — el panel nunca cambia de alto según el estado del stream.
 	status := ""
-	if m.logErr != nil {
-		status = errStyle.Render(fmt.Sprintf("stream de logs terminó: %v", m.logErr))
+	if err := m.currentLogErr(); err != nil {
+		status = errStyle.Render(fmt.Sprintf("terminó: %v", err))
 	}
 
 	content := title + "\n\n" + m.viewport.View() + "\n" + status
@@ -129,7 +150,7 @@ func padRight(s string, n int) string {
 }
 
 // numberedLine arma una entrada de log con su número de línea (1-based) y un
-// separador. i es el índice 0-based dentro de m.logLines.
+// separador. i es el índice 0-based dentro del buffer que se esté mostrando.
 //
 // A propósito es texto plano, sin ningún color ANSI. hardWrapLine corta esto
 // con ansi.Cut para armar el wrap manual del panel de logs, y en la práctica

@@ -60,3 +60,27 @@ func TestValidateRejectsBadStorageMode(t *testing.T) {
 		t.Fatal("esperaba error por storage.mode inválido")
 	}
 }
+
+func TestValidateRejectsProcessWithoutCmd(t *testing.T) {
+	cfg := &Config{
+		Version:      1,
+		Project:      Project{Name: "x"},
+		Environments: map[string]Environment{"dev": {Engine: "floci", Storage: Storage{Mode: StorageMemory}}},
+		Processes:    map[string]Process{"gateway": {Dir: "./gateway"}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("esperaba error por process sin cmd")
+	}
+}
+
+func TestValidateAcceptsProcesses(t *testing.T) {
+	cfg := &Config{
+		Version:      1,
+		Project:      Project{Name: "x"},
+		Environments: map[string]Environment{"dev": {Engine: "floci", Storage: Storage{Mode: StorageMemory}}},
+		Processes:    map[string]Process{"gateway": {Cmd: "krakend run -c krakend.json", Dir: "./gateway"}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, quería nil con un process válido", err)
+	}
+}

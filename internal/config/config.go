@@ -44,11 +44,23 @@ type Project struct {
 	Description string `yaml:"description,omitempty"`
 }
 
+// Process es un comando local declarado a mano (no gestionado por floci):
+// un gateway (KrakenD, nginx, lo que sea), un frontend, un worker, etc.
+// hels no sabe nada de qué hace el comando — lo corre tal cual, en Dir si se
+// especifica, y muestra su salida en vivo en "hels dashboard", igual que
+// mprocs. Así ningún proceso externo (KrakenD incluido) queda "quemado" en
+// el código de hels: el usuario lo declara donde y como quiera.
+type Process struct {
+	Cmd string `yaml:"cmd"`
+	Dir string `yaml:"dir,omitempty"`
+}
+
 // Config es el esquema raíz de hels.yaml.
 type Config struct {
 	Version      int                    `yaml:"version"`
 	Project      Project                `yaml:"project"`
 	Environments map[string]Environment `yaml:"environments"`
+	Processes    map[string]Process     `yaml:"processes,omitempty"`
 }
 
 // Load lee, parsea y valida un hels.yaml desde disco.
@@ -89,6 +101,11 @@ func (c *Config) Validate() error {
 		case StorageMemory, StoragePersistent, StorageHybrid, StorageWAL:
 		default:
 			return fmt.Errorf("entorno %q: storage.mode %q inválido", name, env.Storage.Mode)
+		}
+	}
+	for name, proc := range c.Processes {
+		if proc.Cmd == "" {
+			return fmt.Errorf("processes.%s: cmd es obligatorio", name)
 		}
 	}
 	return nil

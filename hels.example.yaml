@@ -16,3 +16,16 @@ environments:
       - s3
       - lambda
       - dynamodb
+
+# "hels dashboard" arranca cada uno de estos procesos solo y muestra su
+# salida en vivo junto a los servicios de floci — el gateway (KrakenD o el
+# que sea), el frontend, un worker, lo que necesites correr en paralelo.
+# Descomentá y ajustá:
+#
+# processes:
+#   gateway:
+#     cmd: krakend run -c krakend.json
+#     dir: ./gateway
+#   frontend:
+#     cmd: npm run dev
+#     dir: ./frontend

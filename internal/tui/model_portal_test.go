@@ -25,11 +25,11 @@ func TestViewHeightIsFixedRegardlessOfContent(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := New()
+			m := New(nil)
 			m.Update(tea.WindowSizeMsg{Width: 100, Height: 25})
 			m.Update(containersLoadedMsg{containers: []Container{{ID: "abc", Name: "svc"}}})
 			if tc.lines != nil {
-				m.Update(logLinesMsg{gen: m.logGen, lines: tc.lines})
+				m.Update(logLinesMsg{gen: m.containerLogGen, lines: tc.lines})
 			}
 
 			rows := strings.Split(m.View(), "\n")

@@ -4,10 +4,10 @@ import "testing"
 
 func TestHitTestList(t *testing.T) {
 	m := &Model{
-		containers: []Container{
-			{ID: "a", Name: "svc-a"},
-			{ID: "b", Name: "svc-b"},
-			{ID: "c", Name: "svc-c"},
+		items: []listItem{
+			{kind: kindProcess, key: "proc:gateway", name: "gateway"},
+			{kind: kindContainer, key: "b", name: "svc-b"},
+			{kind: kindContainer, key: "c", name: "svc-c"},
 		},
 	}
 
@@ -17,11 +17,13 @@ func TestHitTestList(t *testing.T) {
 		wantIdx int
 		wantOK  bool
 	}{
-		{"primer ítem", 5, listItemsTopRow, 0, true},
-		{"segundo ítem", 5, listItemsTopRow + 1, 1, true},
-		{"tercer ítem", 5, listItemsTopRow + 2, 2, true},
+		{"primer ítem, fila del nombre", 5, listItemsTopRow, 0, true},
+		{"primer ítem, fila del estado", 5, listItemsTopRow + 1, 0, true},
+		{"segundo ítem, fila del nombre", 5, listItemsTopRow + 2, 1, true},
+		{"segundo ítem, fila del estado", 5, listItemsTopRow + 3, 1, true},
+		{"tercer ítem", 5, listItemsTopRow + 4, 2, true},
 		{"fila arriba del primer ítem (título)", 5, listItemsTopRow - 1, 0, false},
-		{"fila debajo del último ítem", 5, listItemsTopRow + 3, 0, false},
+		{"fila debajo del último ítem", 5, listItemsTopRow + 6, 0, false},
 		{"fuera del panel de lista (a la derecha)", listPaneOuterWidth, listItemsTopRow, 0, false},
 		{"x negativo", -1, listItemsTopRow, 0, false},
 	}

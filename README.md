@@ -99,13 +99,46 @@ Node.js/npm/`serverless-localstack` instalados.
 
 Recursos que todavía no crea (API Gateway, Cognito, ElastiCache, ECS, ...) se
 listan al final de la corrida como "salteados" — no se ignoran en silencio.
-Para exponer una función por HTTP hoy, apuntá tu gateway (ej.
-[KrakenD](https://www.krakend.io/)) directo al endpoint de invocación de
-Lambda que ya expone floci sin necesitar autenticación:
+Para exponer una función por HTTP hoy, apuntá tu gateway (KrakenD, nginx, el
+que sea) directo al endpoint de invocación de Lambda que ya expone floci sin
+necesitar autenticación:
 
 ```
 POST http://localhost:4566/2015-03-31/functions/<nombre-de-la-función>/invocations
 ```
+
+### Dashboard: todo en una vista, al estilo mprocs
+
+`hels.yaml` puede declarar procesos locales — un gateway, un frontend, un
+worker, lo que necesites correr en paralelo:
+
+```yaml
+processes:
+  gateway:
+    cmd: docker run --rm --name mi-gateway -p 8080:8080 -v ./gateway/config.json:/etc/krakend/krakend.json krakend run -c /etc/krakend/krakend.json
+    dir: .
+  frontend:
+    cmd: npm run dev
+    dir: ./frontend
+```
+
+**hels no sabe ni le importa qué hace cada comando** — no está "quemado"
+ningún gateway en particular: declarás el que uses, donde lo tengas, y hels
+lo corre tal cual. Después:
+
+```bash
+hels dashboard
+```
+
+Arranca **todos** los `processes.*` de una (igual que mprocs) y los muestra
+arriba en la lista, con sus logs en vivo — y abajo, la infraestructura
+Docker (floci y cualquier otro contenedor). Todo en una sola vista: front,
+back, gateway e infra, sin acordarte de qué comando suelto correr en qué
+terminal aparte.
+
+- Click o `j`/`k` para elegir un servicio; `Tab` para pasarle el foco del teclado al panel de logs.
+- `r` reinicia el proceso seleccionado (no aplica a contenedores de infra — esos se manejan con `hels env`).
+- `q` sale, parando primero todos los procesos locales (no deja nada huérfano corriendo).
 
 ## Desarrollo
 
