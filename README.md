@@ -143,6 +143,15 @@ terminal aparte.
 La lista de infra solo muestra contenedores que `hels` gestiona (floci y lo
 que venga después) — no todo lo que esté corriendo en Docker en tu máquina.
 
+**Menú de categorías**: arriba de la lista hay una fila de pestañas
+clickeables (`[*] [>] [#] [λ] [Q] [T]` — todos, procesos, infra, Lambdas,
+colas, tópicos) para saltar directo a una categoría sin scrollear entre
+decenas de ítems; solo aparecen las que tienen algo. `←`/`→` (o `h`/`l`) las
+cicla también desde el teclado. Con muchos servicios (un proyecto con
+varias Lambdas, colas, etc.) la lista scrollea sola dentro de su categoría
+— con el mouse (rueda sobre la lista) o con `j`/`k`, que llevan el cursor
+más allá de lo visible.
+
 **Funciones Lambda (`λ`)**: si el entorno declarado en `hels.yaml` está
 arriba, el dashboard le pregunta a floci qué funciones tiene desplegadas y
 las suma a la lista, con su estado (si floci tiene ahora mismo un contenedor
@@ -161,7 +170,7 @@ no todavía para ver su output — es un límite de floci, no de `hels`, y esta
 pieza queda lista para heredar esos logs el día que floci los exponga de
 verdad.
 
-**Colas SQS (`▤`) y tópicos SNS (`◎`)**: mismo mecanismo — se listan las que
+**Colas SQS (`Q`) y tópicos SNS (`T`)**: mismo mecanismo — se listan las que
 haya desplegadas contra el entorno activo. Una cola muestra en su estado
 cuántos mensajes tiene visibles/en vuelo, y al seleccionarla el panel de
 logs muestra hasta 10 mensajes reales (ID corto + body), refrescado en cada

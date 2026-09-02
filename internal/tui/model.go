@@ -34,7 +34,9 @@ const (
 
 	listPaneWidth      = 30
 	listPaneOuterWidth = listPaneWidth + paneChrome
-	listItemsTopRow    = 1 + paneTitleLines // 1 = borde-top del panel
+	categoryTabsRow    = 1 + paneTitleLines     // 1 = borde-top del panel
+	listItemsTopRow    = categoryTabsRow + 1    // +1 = la fila de categorías
+	listContentLeftCol = 2                      // borde izq (1) + padding izq (1) del panel
 )
 
 // focusArea indica qué panel recibe el teclado y el scroll en este momento.
@@ -55,6 +57,38 @@ const (
 	kindQueue
 	kindTopic
 )
+
+// kindAll es el valor de categoryFilter que significa "sin filtrar, mostrar
+// todo" — no es un itemKind real (ningún listItem lo usa), por eso el -1.
+const kindAll itemKind = -1
+
+// itemIcon es el ícono de una categoría, compartido entre el menú de
+// categorías y cada fila de la lista para que sean siempre coherentes.
+//
+// A propósito son todos caracteres ASCII (salvo λ, que es una letra griega
+// normal — ancho angosto garantizado en cualquier terminal/fuente). Antes
+// se usaban símbolos del bloque de formas geométricas (▶ ● ▤ ◎), que son
+// "ancho ambiguo" en Unicode (según el terminal/fuente rinden a 1 o 2
+// celdas) — no resultó ser la causa del desborde de una fila que se veía
+// con la lista (esa era otra cosa, ver el comentario en renderList sobre
+// Width() redundante), pero de todas formas es más robusto no depender de
+// que la terminal del usuario los interprete como angostos.
+func itemIcon(k itemKind) string {
+	switch k {
+	case kindContainer:
+		return "#"
+	case kindLambda:
+		return "λ"
+	case kindQueue:
+		return "Q"
+	case kindTopic:
+		return "T"
+	case kindAll:
+		return "*"
+	default:
+		return ">"
+	}
+}
 
 // listItem es una fila de la lista: o un proceso local (declarado en
 // hels.yaml, corrido por hels) o un contenedor Docker (infra: floci, o
@@ -153,6 +187,14 @@ type Model struct {
 	selectedKey string
 	focus       focusArea
 
+	// categoryFilter restringe qué categoría de la lista se muestra
+	// (kindAll = todas). listScroll es el índice del primer ítem visible
+	// DENTRO de esa vista filtrada — la lista es una ventana de tamaño fijo,
+	// igual que el panel de logs, así que con muchos ítems hay que
+	// scrollear en vez de dejar que el panel crezca sin límite.
+	categoryFilter itemKind
+	listScroll     int
+
 	// flociEndpoint es la URL de floci contra la que preguntamos qué
 	// funciones Lambda/colas SQS/tópicos SNS hay desplegados ("" si no hay
 	// hels.yaml o ningún entorno declarado está corriendo — en ese caso no
@@ -190,7 +232,7 @@ type Model struct {
 // y tópicos SNS — "" si no hay ninguno corriendo, en cuyo caso esas
 // secciones del dashboard no aparecen.
 func New(specs []ProcessSpec, flociEndpoint string) *Model {
-	return &Model{processSpecs: specs, flociEndpoint: flociEndpoint}
+	return &Model{processSpecs: specs, flociEndpoint: flociEndpoint, categoryFilter: kindAll}
 }
 
 // AttachProgram le da al modelo una referencia al *tea.Program que lo corre,
@@ -298,9 +340,150 @@ func (m *Model) rebuildItems() {
 	}
 
 	m.items = items
-	if m.cursor >= len(m.items) {
-		m.cursor = maxInt(0, len(m.items)-1)
+	m.clampCursor()
+}
+
+// visibleItems devuelve m.items filtrados por categoryFilter (o todos, si es
+// kindAll). m.cursor y m.listScroll son siempre índices dentro de ESTA
+// vista, no de m.items — así que cambiar de categoría cambia también qué
+// significan.
+func (m *Model) visibleItems() []listItem {
+	if m.categoryFilter == kindAll {
+		return m.items
 	}
+	out := make([]listItem, 0, len(m.items))
+	for _, it := range m.items {
+		if it.kind == m.categoryFilter {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// availableCategories devuelve, en un orden fijo, las categorías que tienen
+// al menos un ítem ahora mismo — así el menú no muestra pestañas vacías
+// (ej. "Colas" antes de que exista ninguna).
+func (m *Model) availableCategories() []itemKind {
+	seen := make(map[itemKind]bool)
+	for _, it := range m.items {
+		seen[it.kind] = true
+	}
+	order := []itemKind{kindProcess, kindContainer, kindLambda, kindQueue, kindTopic}
+	out := make([]itemKind, 0, len(order))
+	for _, k := range order {
+		if seen[k] {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// categoryTab es una pestaña clickeable del menú de categorías, con su
+// posición horizontal exacta dentro del panel — la usan tanto el render
+// (view.go) como el hit-test del click, para que nunca se desalineen.
+type categoryTab struct {
+	kind     itemKind
+	label    string
+	startCol int // inclusive, columna dentro del contenido del panel
+	endCol   int // exclusivo
+}
+
+func (m *Model) categoryTabsLayout() []categoryTab {
+	kinds := append([]itemKind{kindAll}, m.availableCategories()...)
+	tabs := make([]categoryTab, 0, len(kinds))
+	col := 0
+	for _, k := range kinds {
+		label := "[" + itemIcon(k) + "]"
+		width := len([]rune(label))
+		tabs = append(tabs, categoryTab{kind: k, label: label, startCol: col, endCol: col + width})
+		col += width + 1 // 1 espacio de separación entre pestañas
+	}
+	return tabs
+}
+
+// maxVisibleListItems es cuántos ítems (de a 2 filas cada uno) entran en la
+// ventana fija de la lista, dado el alto actual de la terminal.
+func (m *Model) maxVisibleListItems() int {
+	n := m.viewport.Height / 2
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// clampCursor mantiene m.cursor dentro de los límites de la vista filtrada
+// actual (por ejemplo, después de un refresh que la achicó, o de cambiar de
+// categoría) y de paso re-ajusta el scroll para que el cursor siga visible.
+func (m *Model) clampCursor() {
+	n := len(m.visibleItems())
+	if m.cursor >= n {
+		m.cursor = maxInt(0, n-1)
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	m.ensureCursorVisible()
+}
+
+// ensureCursorVisible corre m.listScroll lo mínimo necesario para que
+// m.cursor quede dentro de la ventana visible — el mismo tipo de
+// "scroll-into-view" de cualquier lista con selección.
+func (m *Model) ensureCursorVisible() {
+	max := m.maxVisibleListItems()
+	if m.cursor < m.listScroll {
+		m.listScroll = m.cursor
+	} else if m.cursor >= m.listScroll+max {
+		m.listScroll = m.cursor - max + 1
+	}
+	m.clampListScroll()
+}
+
+// scrollListBy mueve la ventana de la lista sin tocar la selección (para la
+// rueda del mouse, que deja mirar otros ítems sin perder cuál está elegido).
+func (m *Model) scrollListBy(delta int) {
+	m.listScroll += delta
+	m.clampListScroll()
+}
+
+func (m *Model) clampListScroll() {
+	if m.listScroll < 0 {
+		m.listScroll = 0
+	}
+	maxOffset := len(m.visibleItems()) - m.maxVisibleListItems()
+	if maxOffset < 0 {
+		maxOffset = 0
+	}
+	if m.listScroll > maxOffset {
+		m.listScroll = maxOffset
+	}
+}
+
+// setCategoryFilter cambia qué categoría se muestra y arranca de nuevo la
+// selección desde el principio de la vista nueva (los índices viejos no
+// tienen sentido en la categoría nueva).
+func (m *Model) setCategoryFilter(k itemKind) tea.Cmd {
+	if m.categoryFilter == k {
+		return nil
+	}
+	m.categoryFilter = k
+	m.cursor = 0
+	m.listScroll = 0
+	return m.ensureSelection()
+}
+
+// cycleCategoryFilter pasa a la categoría siguiente/anterior (delta ±1),
+// para poder cambiar de categoría también con el teclado.
+func (m *Model) cycleCategoryFilter(delta int) tea.Cmd {
+	kinds := append([]itemKind{kindAll}, m.availableCategories()...)
+	curIdx := 0
+	for i, k := range kinds {
+		if k == m.categoryFilter {
+			curIdx = i
+			break
+		}
+	}
+	next := ((curIdx+delta)%len(kinds) + len(kinds)) % len(kinds)
+	return m.setCategoryFilter(kinds[next])
 }
 
 func (m *Model) findQueue(name string) *QueueInfo {
@@ -437,8 +620,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Un tópico seleccionado no dispara un pedido propio (su detalle sale
 		// de esta misma carga) — si es lo que se está mirando, refrescamos el
 		// panel de logs de una con el dato nuevo.
-		if len(m.items) > 0 && m.cursor < len(m.items) && m.items[m.cursor].kind == kindTopic {
-			name := strings.TrimPrefix(m.items[m.cursor].key, "topic:")
+		if visible := m.visibleItems(); len(visible) > 0 && m.cursor < len(visible) && visible[m.cursor].kind == kindTopic {
+			name := strings.TrimPrefix(visible[m.cursor].key, "topic:")
 			m.containerLogLines = formatTopicDetail(m.findTopic(name))
 			m.refreshLogViewport()
 		}
@@ -539,13 +722,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "up", "k":
 				if m.cursor > 0 {
 					m.cursor--
+					m.ensureCursorVisible()
 					return m, m.ensureSelection()
 				}
 			case "down", "j":
-				if m.cursor < len(m.items)-1 {
+				if m.cursor < len(m.visibleItems())-1 {
 					m.cursor++
+					m.ensureCursorVisible()
 					return m, m.ensureSelection()
 				}
+			case "left", "h":
+				return m, m.cycleCategoryFilter(-1)
+			case "right", "l":
+				return m, m.cycleCategoryFilter(1)
 			}
 			return m, nil
 		}
@@ -555,6 +744,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		switch {
 		case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft:
+			if k, ok := m.hitTestCategoryTabs(msg.X, msg.Y); ok {
+				m.focus = focusList
+				return m, m.setCategoryFilter(k)
+			}
 			if idx, ok := m.hitTestList(msg.X, msg.Y); ok {
 				m.focus = focusList
 				m.cursor = idx
@@ -564,10 +757,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown:
-			// la rueda scrollea los logs según dónde esté el mouse, sin
-			// depender de qué panel tenga el foco del teclado ni tocar la
-			// lista de servicios.
+			// sobre la lista, la rueda scrollea la ventana de servicios sin
+			// tocar la selección; en cualquier otro lado, scrollea los logs
+			// sin depender de qué panel tenga el foco del teclado.
 			if msg.X < listPaneOuterWidth {
+				delta := 2
+				if msg.Button == tea.MouseButtonWheelUp {
+					delta = -2
+				}
+				m.scrollListBy(delta)
 				return m, nil
 			}
 			var cmd tea.Cmd
@@ -593,10 +791,12 @@ func (m *Model) toggleFocus() {
 	}
 }
 
-// hitTestList traduce coordenadas de mouse a un índice de la lista de
-// servicios. Devuelve ok=false si el click cayó fuera del panel de lista o
-// sobre una fila sin servicio. Cada ítem ocupa 2 filas (nombre + estado, ver
-// renderList en view.go), por eso se divide entre 2.
+// hitTestList traduce coordenadas de mouse a un índice DENTRO DE
+// visibleItems() (no de m.items — ver esa función). Devuelve ok=false si el
+// click cayó fuera del panel de lista, sobre una fila sin servicio, o más
+// abajo de lo que la ventana de scroll tiene renderizado ahora mismo. Cada
+// ítem ocupa 2 filas (nombre + estado, ver renderList en view.go), por eso
+// se divide entre 2.
 func (m *Model) hitTestList(x, y int) (int, bool) {
 	if x < 0 || x >= listPaneOuterWidth {
 		return 0, false
@@ -605,23 +805,50 @@ func (m *Model) hitTestList(x, y int) (int, bool) {
 	if rowOffset < 0 {
 		return 0, false
 	}
-	idx := rowOffset / 2
-	if idx >= len(m.items) {
+	row := rowOffset / 2
+	if row >= m.maxVisibleListItems() {
+		return 0, false
+	}
+	idx := m.listScroll + row
+	if idx >= len(m.visibleItems()) {
 		return 0, false
 	}
 	return idx, true
+}
+
+// hitTestCategoryTabs traduce coordenadas de mouse a qué pestaña del menú de
+// categorías (si alguna) cayó bajo el click — comparte el layout exacto con
+// el render (categoryTabsLayout) para que nunca se desalineen.
+func (m *Model) hitTestCategoryTabs(x, y int) (itemKind, bool) {
+	if y != categoryTabsRow || x < 0 || x >= listPaneOuterWidth {
+		return kindAll, false
+	}
+	col := x - listContentLeftCol
+	if col < 0 {
+		return kindAll, false
+	}
+	for _, t := range m.categoryTabsLayout() {
+		if col >= t.startCol && col < t.endCol {
+			return t.kind, true
+		}
+	}
+	return kindAll, false
 }
 
 // ensureSelection arranca (si hace falta) el stream de logs del ítem bajo
 // el cursor. Para un proceso no hay nada que "arrancar": ya viene corriendo
 // solo desde Init, así que solo cambia qué buffer se muestra.
 func (m *Model) ensureSelection() tea.Cmd {
-	if len(m.items) == 0 {
+	visible := m.visibleItems()
+	if len(visible) == 0 {
 		m.selectedKey = ""
 		m.stopContainerStream()
 		return nil
 	}
-	target := m.items[m.cursor]
+	if m.cursor >= len(visible) {
+		m.cursor = len(visible) - 1
+	}
+	target := visible[m.cursor]
 	if target.key == m.selectedKey {
 		return nil
 	}
@@ -705,10 +932,11 @@ func (m *Model) startContainerStream(id string) tea.Cmd {
 // stream al contenedor vivo actual (o muestra el mensaje de "función fría"
 // si ya no hay ninguno).
 func (m *Model) refreshSelectedLambdaStream() tea.Cmd {
-	if len(m.items) == 0 || m.cursor >= len(m.items) {
+	visible := m.visibleItems()
+	if len(visible) == 0 || m.cursor >= len(visible) {
 		return nil
 	}
-	item := m.items[m.cursor]
+	item := visible[m.cursor]
 	if item.kind != kindLambda {
 		return nil
 	}
@@ -738,10 +966,11 @@ func (m *Model) refreshSelectedLambdaStream() tea.Cmd {
 // hay AHORA (mensajes nuevos que llegaron, otros que ya se consumieron en
 // otro lado) en vez de quedarse pegado al primer peek.
 func (m *Model) refreshSelectedQueuePeek() tea.Cmd {
-	if len(m.items) == 0 || m.cursor >= len(m.items) {
+	visible := m.visibleItems()
+	if len(visible) == 0 || m.cursor >= len(visible) {
 		return nil
 	}
-	item := m.items[m.cursor]
+	item := visible[m.cursor]
 	if item.kind != kindQueue {
 		return nil
 	}
@@ -770,10 +999,11 @@ const lambdaColdMessage = "(sin invocaciones activas ahora mismo — invocá la 
 // "r" de mprocs). No hace nada si lo seleccionado es un contenedor de
 // infra — esos se manejan con "hels env", no desde acá.
 func (m *Model) restartSelected() tea.Cmd {
-	if len(m.items) == 0 || m.items[m.cursor].kind != kindProcess {
+	visible := m.visibleItems()
+	if len(visible) == 0 || m.cursor >= len(visible) || visible[m.cursor].kind != kindProcess {
 		return nil
 	}
-	name := strings.TrimPrefix(m.items[m.cursor].key, "proc:")
+	name := strings.TrimPrefix(visible[m.cursor].key, "proc:")
 	pe := m.findProcess(name)
 	if pe == nil {
 		return nil
@@ -891,10 +1121,11 @@ func waitForProcLines(name string, h *procHandle, gen int) tea.Cmd {
 // de un proceso (persistente, sigue corriendo en segundo plano) o el del
 // stream de un contenedor (on-demand).
 func (m *Model) currentLogLines() []string {
-	if len(m.items) == 0 || m.cursor >= len(m.items) {
+	visible := m.visibleItems()
+	if len(visible) == 0 || m.cursor >= len(visible) {
 		return nil
 	}
-	item := m.items[m.cursor]
+	item := visible[m.cursor]
 	if item.kind == kindProcess {
 		if pe := m.findProcess(strings.TrimPrefix(item.key, "proc:")); pe != nil {
 			return pe.lines
@@ -908,10 +1139,11 @@ func (m *Model) currentLogLines() []string {
 // de logs para el ítem seleccionado (el proceso terminó con error, o el
 // stream del contenedor cortó con error).
 func (m *Model) currentLogErr() error {
-	if len(m.items) == 0 || m.cursor >= len(m.items) {
+	visible := m.visibleItems()
+	if len(visible) == 0 || m.cursor >= len(visible) {
 		return nil
 	}
-	item := m.items[m.cursor]
+	item := visible[m.cursor]
 	if item.kind == kindProcess {
 		if pe := m.findProcess(strings.TrimPrefix(item.key, "proc:")); pe != nil {
 			return pe.exitErr

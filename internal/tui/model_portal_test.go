@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -35,6 +36,34 @@ func TestViewHeightIsFixedRegardlessOfContent(t *testing.T) {
 			rows := strings.Split(m.View(), "\n")
 			if len(rows) != 25 {
 				t.Fatalf("View() devolvió %d filas, quería exactamente 25 (Height pedido) para el caso %q", len(rows), tc.name)
+			}
+		})
+	}
+}
+
+// TestListPanelHeightIsFixedRegardlessOfItemCount es el mismo tipo de
+// invariante que TestViewHeightIsFixedRegardlessOfContent, pero para el
+// panel IZQUIERDO (lista de servicios): con más ítems de los que entran en
+// la ventana, el panel tiene que scrollear, no desbordar la terminal. Cubre
+// una regresión real: el ítem SELECCIONADO (el único que fuerza su ancho
+// exacto contra el panel) desbordaba el panel en una fila por un .Width()
+// redundante — la misma clase de bug de lipgloss que ya rompía el panel de
+// logs (ver el comentario en renderList).
+func TestListPanelHeightIsFixedRegardlessOfItemCount(t *testing.T) {
+	for _, n := range []int{0, 1, 3, 25} {
+		t.Run(fmt.Sprintf("%d contenedores", n), func(t *testing.T) {
+			containers := make([]Container, n)
+			for i := range containers {
+				containers[i] = Container{ID: fmt.Sprintf("c%d", i), Name: fmt.Sprintf("svc-%d", i), Status: "Up"}
+			}
+
+			m := New(nil, "")
+			m.Update(tea.WindowSizeMsg{Width: 100, Height: 25})
+			m.Update(containersLoadedMsg{containers: containers})
+
+			rows := strings.Split(m.View(), "\n")
+			if len(rows) != 25 {
+				t.Fatalf("View() devolvió %d filas con %d contenedores, quería exactamente 25", len(rows), n)
 			}
 		})
 	}

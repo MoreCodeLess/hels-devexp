@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -39,7 +40,7 @@ func (m *Model) View() string {
 		return "cargando...\n"
 	}
 
-	hints := hintsBarStyle.Render(" hels dashboard — click o j/k elige · Tab cambia de panel · r reinicia el proceso · rueda/pgup/pgdn scrollea vertical · h/l scrollea horizontal · q sale ")
+	hints := hintsBarStyle.Render(" hels dashboard — click o j/k elige · ←/→ cambia categoría · Tab cambia de panel · r reinicia el proceso · rueda/pgup/pgdn scrollea · q sale ")
 
 	list := m.renderList()
 	logs := m.renderLogs()
@@ -49,47 +50,80 @@ func (m *Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, body, hints)
 }
 
+// renderList arma el panel izquierdo: título, menú de categorías clickeable,
+// y una VENTANA de tamaño fijo sobre visibleItems() (con scroll si no
+// entran todos). Es un "portal" igual que el panel de logs (ver
+// refreshLogViewport): el total de filas de contenido tiene que dar
+// SIEMPRE exactamente m.viewport.Height+paneTitleLines+logStatusLines, sin
+// importar cuántos ítems haya — si no, lipgloss no trunca lo que sobra (no
+// tiene forma de hacerlo) y el panel entero se desborda, rompiendo la vista
+// con muchos ítems. Por eso el mensaje de error/lista-vacía también cuenta
+// contra ese presupuesto en vez de sumarse aparte.
 func (m *Model) renderList() string {
 	content := "SERVICIOS\n\n"
+	content += m.renderCategoryTabs() + "\n"
 
-	if m.err != nil {
-		content += errStyle.Render(fmt.Sprintf("error: %v", m.err)) + "\n"
-	} else if len(m.items) == 0 {
-		content += statusDimStyle.Render("(nada corriendo todavía)") + "\n"
+	visible := m.visibleItems()
+	budget := m.viewport.Height
+	var body []string
+
+	switch {
+	case m.err != nil:
+		body = append(body, errStyle.Render(fmt.Sprintf("error: %v", m.err)))
+		budget--
+	case len(visible) == 0:
+		body = append(body, statusDimStyle.Render("(nada corriendo todavía)"))
+		budget--
+	}
+
+	maxVisible := budget / 2
+	if maxVisible < 0 {
+		maxVisible = 0
+	}
+	start := m.listScroll
+	if start > len(visible) {
+		start = len(visible)
+	}
+	end := start + maxVisible
+	if end > len(visible) {
+		end = len(visible)
 	}
 
 	// Cada ítem ocupa SIEMPRE 2 filas (nombre + estado), esté seleccionado o
-	// no — hitTestList asume ese ancho fijo para traducir un click a un
+	// no — hitTestList asume ese alto fijo para traducir un click a un
 	// índice de la lista (ver el comentario ahí).
-	for i, it := range m.items {
-		icon := "▶" // proceso local (declarado en hels.yaml)
-		switch it.kind {
-		case kindContainer:
-			icon = "●" // contenedor de infra (Docker)
-		case kindLambda:
-			icon = "λ" // función Lambda desplegada contra floci
-		case kindQueue:
-			icon = "▤" // cola SQS
-		case kindTopic:
-			icon = "◎" // tópico SNS
-		}
+	for i := start; i < end; i++ {
+		it := visible[i]
 		dotStyle := statusOKStyle
 		if !it.ok {
 			dotStyle = statusBadStyle
 		}
-		dot := dotStyle.Render(icon)
+		dot := dotStyle.Render(itemIcon(it.kind))
 
 		nameLine := fmt.Sprintf("%s %s", dot, it.name)
 		statusLine := "  " + it.status
 
+		// El ancho se fuerza ACÁ, línea por línea, con el propio .Width() de
+		// lipgloss (mide con el mismo criterio ansi-aware que usa el resto
+		// del código, a diferencia del padRight manual que había antes) — y
+		// por eso el panel entero, más abajo, NO vuelve a pedir .Width(): es
+		// la misma combinación "Width() redundante + Padding()" que ya
+		// habíamos visto romper el panel de logs (ver renderLogs), y acá
+		// pasaba con la fila seleccionada en cuanto la lista dejó de crecer
+		// sin límite y empezó a exigir un alto exacto.
 		if i == m.cursor {
-			content += selectedItemStyle.Render(padRight(nameLine, listPaneWidth)) + "\n"
-			content += selectedItemStyle.Render(padRight(statusLine, listPaneWidth)) + "\n"
+			body = append(body, selectedItemStyle.Width(listPaneWidth).Render(nameLine))
+			body = append(body, selectedItemStyle.Width(listPaneWidth).Render(statusLine))
 		} else {
-			content += itemStyle.Render(nameLine) + "\n"
-			content += statusDimStyle.Render(statusLine) + "\n"
+			body = append(body, itemStyle.Width(listPaneWidth).Render(nameLine))
+			body = append(body, statusDimStyle.Width(listPaneWidth).Render(statusLine))
 		}
 	}
+
+	for len(body) < m.viewport.Height {
+		body = append(body, "")
+	}
+	content += strings.Join(body, "\n")
 
 	style := paneStyle
 	if m.focus == focusList {
@@ -97,16 +131,31 @@ func (m *Model) renderList() string {
 	}
 
 	return style.
-		Width(listPaneWidth).
 		Height(m.viewport.Height + paneTitleLines + logStatusLines).
 		Render(content)
 }
 
+// renderCategoryTabs arma la fila de pestañas clickeables ("[*] [▶] [●] ..."
+// ) — comparte layout exacto con hitTestCategoryTabs para que el click
+// siempre caiga sobre lo que se está viendo.
+func (m *Model) renderCategoryTabs() string {
+	tabs := m.categoryTabsLayout()
+	parts := make([]string, len(tabs))
+	for i, t := range tabs {
+		if t.kind == m.categoryFilter {
+			parts[i] = selectedItemStyle.Render(t.label)
+		} else {
+			parts[i] = statusDimStyle.Render(t.label)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func (m *Model) renderLogs() string {
 	title := "LOGS"
-	if len(m.items) > 0 && m.cursor < len(m.items) {
+	if visible := m.visibleItems(); len(visible) > 0 && m.cursor < len(visible) {
 		kind := "proceso"
-		switch m.items[m.cursor].kind {
+		switch visible[m.cursor].kind {
 		case kindContainer:
 			kind = "contenedor"
 		case kindLambda:
@@ -116,7 +165,7 @@ func (m *Model) renderLogs() string {
 		case kindTopic:
 			kind = "tópico"
 		}
-		title = fmt.Sprintf("LOGS — %s (%s)", m.items[m.cursor].name, kind)
+		title = fmt.Sprintf("LOGS — %s (%s)", visible[m.cursor].name, kind)
 	}
 
 	// Reservamos siempre 1 fila de estado (en blanco si no hay error), para
@@ -148,19 +197,6 @@ func (m *Model) renderLogs() string {
 	return style.
 		Height(m.viewport.Height + paneTitleLines + logStatusLines).
 		Render(content)
-}
-
-// padRight rellena s con espacios hasta n runas, para que el resaltado de
-// selección cubra todo el ancho de la fila y no solo el texto.
-func padRight(s string, n int) string {
-	pad := n - len([]rune(s))
-	if pad <= 0 {
-		return s
-	}
-	for i := 0; i < pad; i++ {
-		s += " "
-	}
-	return s
 }
 
 // numberedLine arma una entrada de log con su número de línea (1-based) y un
