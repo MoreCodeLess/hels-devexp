@@ -68,6 +68,10 @@ func (m *Model) renderList() string {
 			icon = "●" // contenedor de infra (Docker)
 		case kindLambda:
 			icon = "λ" // función Lambda desplegada contra floci
+		case kindQueue:
+			icon = "▤" // cola SQS
+		case kindTopic:
+			icon = "◎" // tópico SNS
 		}
 		dotStyle := statusOKStyle
 		if !it.ok {
@@ -107,6 +111,10 @@ func (m *Model) renderLogs() string {
 			kind = "contenedor"
 		case kindLambda:
 			kind = "lambda"
+		case kindQueue:
+			kind = "cola"
+		case kindTopic:
+			kind = "tópico"
 		}
 		title = fmt.Sprintf("LOGS — %s (%s)", m.items[m.cursor].name, kind)
 	}

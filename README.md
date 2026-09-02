@@ -161,6 +161,22 @@ no todavía para ver su output — es un límite de floci, no de `hels`, y esta
 pieza queda lista para heredar esos logs el día que floci los exponga de
 verdad.
 
+**Colas SQS (`▤`) y tópicos SNS (`◎`)**: mismo mecanismo — se listan las que
+haya desplegadas contra el entorno activo. Una cola muestra en su estado
+cuántos mensajes tiene visibles/en vuelo, y al seleccionarla el panel de
+logs muestra hasta 10 mensajes reales (ID corto + body), refrescado en cada
+ciclo. Es un **peek no destructivo** (`ReceiveMessage` con
+`VisibilityTimeout=0`): no los saca de la cola ni se los esconde a otros
+consumidores. Ojo: sí cuenta como una entrega más a efectos de
+`ReceiveCount` — si tenés una redrive policy con `maxReceiveCount` muy
+ajustado, tenerla seleccionada en el dashboard suma intentos igual que un
+consumidor real.
+
+Un tópico SNS no retiene histórico de publicaciones (así es SNS en AWS real
+también), así que lo que se muestra al seleccionarlo es a quién reenvía lo
+que se publique ahí (sus suscriptores — colas, funciones, lo que sea) en
+vez de un log de eventos pasados.
+
 ## Desarrollo
 
 ```bash

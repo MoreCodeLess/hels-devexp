@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -51,6 +52,8 @@ const (
 	kindProcess itemKind = iota
 	kindContainer
 	kindLambda
+	kindQueue
+	kindTopic
 )
 
 // listItem es una fila de la lista: o un proceso local (declarado en
@@ -87,6 +90,25 @@ type containersLoadedMsg struct {
 type lambdasLoadedMsg struct {
 	functions []LambdaFunction
 	err       error
+}
+
+// messagingLoadedMsg trae las colas SQS y tópicos SNS del entorno floci
+// activo. Es una consulta estructural (ListQueues/GetQueueAttributes,
+// ListTopics/ListSubscriptionsByTopic) — no consume ningún mensaje, así que
+// a diferencia del peek de una cola seleccionada, esta se puede repetir en
+// cada refresh sin ningún efecto secundario.
+type messagingLoadedMsg struct {
+	queues []QueueInfo
+	topics []TopicInfo
+	err    error
+}
+
+// queuePeekMsg trae el resultado de "espiar" (ver peekQueueMessages) la cola
+// seleccionada ahora mismo.
+type queuePeekMsg struct {
+	gen   int
+	lines []string
+	err   error
 }
 
 type refreshTickMsg time.Time
@@ -131,12 +153,14 @@ type Model struct {
 	selectedKey string
 	focus       focusArea
 
-	// lambdaEndpoint es la URL de floci contra la que preguntamos qué
-	// funciones Lambda hay desplegadas ("" si no hay hels.yaml o ningún
-	// entorno declarado está corriendo — en ese caso no se muestra la
-	// sección de Lambdas).
-	lambdaEndpoint string
-	lambdas        []LambdaFunction
+	// flociEndpoint es la URL de floci contra la que preguntamos qué
+	// funciones Lambda/colas SQS/tópicos SNS hay desplegados ("" si no hay
+	// hels.yaml o ningún entorno declarado está corriendo — en ese caso no
+	// se muestran esas secciones).
+	flociEndpoint string
+	lambdas       []LambdaFunction
+	queues        []QueueInfo
+	topics        []TopicInfo
 
 	// Estado del stream de logs de un CONTENEDOR o LAMBDA seleccionado
 	// (on-demand: se arranca al seleccionar, se para al deseleccionar). Los
@@ -161,11 +185,12 @@ type Model struct {
 // New crea el modelo inicial del dashboard. specs son los procesos locales
 // declarados en hels.yaml (processes.*) — puede ser nil/vacío si no hay
 // hels.yaml o no declara ninguno; el dashboard sigue funcionando mostrando
-// solo la infraestructura Docker. lambdaEndpoint es la URL del floci activo
-// (ej. "http://localhost:4566") para listar sus funciones Lambda — "" si no
-// hay ninguno corriendo, en cuyo caso esa sección del dashboard no aparece.
-func New(specs []ProcessSpec, lambdaEndpoint string) *Model {
-	return &Model{processSpecs: specs, lambdaEndpoint: lambdaEndpoint}
+// solo la infraestructura Docker. flociEndpoint es la URL del floci activo
+// (ej. "http://localhost:4566") para listar sus funciones Lambda, colas SQS
+// y tópicos SNS — "" si no hay ninguno corriendo, en cuyo caso esas
+// secciones del dashboard no aparecen.
+func New(specs []ProcessSpec, flociEndpoint string) *Model {
+	return &Model{processSpecs: specs, flociEndpoint: flociEndpoint}
 }
 
 // AttachProgram le da al modelo una referencia al *tea.Program que lo corre,
@@ -177,8 +202,8 @@ func (m *Model) AttachProgram(p *tea.Program) {
 
 func (m *Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{loadContainersCmd(), tickCmd()}
-	if m.lambdaEndpoint != "" {
-		cmds = append(cmds, loadLambdasCmd(m.lambdaEndpoint))
+	if m.flociEndpoint != "" {
+		cmds = append(cmds, loadLambdasCmd(m.flociEndpoint), loadMessagingCmd(m.flociEndpoint))
 	}
 	cmds = append(cmds, m.startAllProcesses()...)
 	return tea.Batch(cmds...)
@@ -258,10 +283,60 @@ func (m *Model) rebuildItems() {
 		}
 	}
 
+	for _, q := range m.queues {
+		status := fmt.Sprintf("%d visibles, %d en vuelo", q.Visible, q.InFlight)
+		items = append(items, listItem{
+			kind: kindQueue, key: "queue:" + q.Name, name: q.Name, status: status, ok: true,
+		})
+	}
+
+	for _, t := range m.topics {
+		status := fmt.Sprintf("%d suscriptor(es)", len(t.Subscriptions))
+		items = append(items, listItem{
+			kind: kindTopic, key: "topic:" + t.Name, name: t.Name, status: status, ok: true,
+		})
+	}
+
 	m.items = items
 	if m.cursor >= len(m.items) {
 		m.cursor = maxInt(0, len(m.items)-1)
 	}
+}
+
+func (m *Model) findQueue(name string) *QueueInfo {
+	for i := range m.queues {
+		if m.queues[i].Name == name {
+			return &m.queues[i]
+		}
+	}
+	return nil
+}
+
+func (m *Model) findTopic(name string) *TopicInfo {
+	for i := range m.topics {
+		if m.topics[i].Name == name {
+			return &m.topics[i]
+		}
+	}
+	return nil
+}
+
+// formatTopicDetail arma las líneas del panel de logs para un tópico SNS
+// seleccionado. SNS no retiene histórico de publicaciones — lo único
+// inspeccionable es a quién reenvía lo que se publique ahí.
+func formatTopicDetail(t *TopicInfo) []string {
+	if t == nil {
+		return []string{"(tópico no encontrado)"}
+	}
+	if len(t.Subscriptions) == 0 {
+		return []string{"(sin suscriptores)"}
+	}
+	lines := make([]string, 0, len(t.Subscriptions)+1)
+	lines = append(lines, fmt.Sprintf("%d suscriptor(es):", len(t.Subscriptions)))
+	for _, s := range t.Subscriptions {
+		lines = append(lines, "  - "+s)
+	}
+	return lines
 }
 
 func maxInt(a, b int) int {
@@ -282,6 +357,30 @@ func loadLambdasCmd(endpoint string) tea.Cmd {
 	return func() tea.Msg {
 		fns, err := listLambdaFunctions(endpoint)
 		return lambdasLoadedMsg{functions: fns, err: err}
+	}
+}
+
+func loadMessagingCmd(endpoint string) tea.Cmd {
+	return func() tea.Msg {
+		qs, qerr := listQueues(endpoint)
+		ts, terr := listTopics(endpoint)
+		err := qerr
+		if err == nil {
+			err = terr
+		}
+		return messagingLoadedMsg{queues: qs, topics: ts, err: err}
+	}
+}
+
+// peekQueueCmd espía (ver peekQueueMessages) la cola q y devuelve las líneas
+// ya formateadas para el panel de logs.
+func peekQueueCmd(endpoint string, q QueueInfo, gen int) tea.Cmd {
+	return func() tea.Msg {
+		msgs, err := peekQueueMessages(endpoint, q.URL, 10)
+		if err != nil {
+			return queuePeekMsg{gen: gen, err: err}
+		}
+		return queuePeekMsg{gen: gen, lines: formatPeekedMessages(msgs)}
 	}
 }
 
@@ -329,16 +428,51 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildItems()
 		return m, m.ensureSelection()
 
+	case messagingLoadedMsg:
+		if msg.err == nil {
+			m.queues = msg.queues
+			m.topics = msg.topics
+		}
+		m.rebuildItems()
+		// Un tópico seleccionado no dispara un pedido propio (su detalle sale
+		// de esta misma carga) — si es lo que se está mirando, refrescamos el
+		// panel de logs de una con el dato nuevo.
+		if len(m.items) > 0 && m.cursor < len(m.items) && m.items[m.cursor].kind == kindTopic {
+			name := strings.TrimPrefix(m.items[m.cursor].key, "topic:")
+			m.containerLogLines = formatTopicDetail(m.findTopic(name))
+			m.refreshLogViewport()
+		}
+		return m, m.ensureSelection()
+
+	case queuePeekMsg:
+		if msg.gen != m.containerLogGen {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.containerLogErr = msg.err
+		} else {
+			m.containerLogErr = nil
+			m.containerLogLines = msg.lines
+		}
+		m.refreshLogViewport()
+		return m, nil
+
 	case refreshTickMsg:
 		cmds := []tea.Cmd{loadContainersCmd(), tickCmd()}
-		if m.lambdaEndpoint != "" {
-			cmds = append(cmds, loadLambdasCmd(m.lambdaEndpoint))
+		if m.flociEndpoint != "" {
+			cmds = append(cmds, loadLambdasCmd(m.flociEndpoint), loadMessagingCmd(m.flociEndpoint))
 		}
 		// Si lo seleccionado es una Lambda, el contenedor efímero que muestra
 		// pudo haber cambiado de identidad (floci lo recicló por inactividad
 		// y lo volvió a crear en otra invocación) o haber aparecido/
 		// desaparecido — hay que re-engancharse al que esté vivo ahora.
 		if cmd := m.refreshSelectedLambdaStream(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		// Si lo seleccionado es una cola, volvemos a espiarla para que el
+		// panel de logs se sienta "en vivo" (llegan mensajes nuevos, otros
+		// consumidores se llevan los que había).
+		if cmd := m.refreshSelectedQueuePeek(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		return m, tea.Batch(cmds...)
@@ -514,6 +648,29 @@ func (m *Model) ensureSelection() tea.Cmd {
 		return m.startContainerStream(c.ID)
 	}
 
+	if target.kind == kindQueue {
+		name := strings.TrimPrefix(target.key, "queue:")
+		q := m.findQueue(name)
+		if q == nil {
+			m.containerLogLines = []string{"(cola no encontrada)"}
+			m.containerLogErr = nil
+			m.refreshLogViewport()
+			return nil
+		}
+		m.containerLogLines = nil
+		m.containerLogErr = nil
+		m.containerLogGen++
+		return peekQueueCmd(m.flociEndpoint, *q, m.containerLogGen)
+	}
+
+	if target.kind == kindTopic {
+		name := strings.TrimPrefix(target.key, "topic:")
+		m.containerLogLines = formatTopicDetail(m.findTopic(name))
+		m.containerLogErr = nil
+		m.refreshLogViewport()
+		return nil
+	}
+
 	// kindContainer: la key ya es el ID del contenedor.
 	return m.startContainerStream(target.key)
 }
@@ -574,6 +731,26 @@ func (m *Model) refreshSelectedLambdaStream() tea.Cmd {
 		m.refreshLogViewport()
 	}
 	return nil
+}
+
+// refreshSelectedQueuePeek se llama en cada refreshTick. Si lo seleccionado
+// es una cola, la vuelve a espiar para que el panel de logs muestre lo que
+// hay AHORA (mensajes nuevos que llegaron, otros que ya se consumieron en
+// otro lado) en vez de quedarse pegado al primer peek.
+func (m *Model) refreshSelectedQueuePeek() tea.Cmd {
+	if len(m.items) == 0 || m.cursor >= len(m.items) {
+		return nil
+	}
+	item := m.items[m.cursor]
+	if item.kind != kindQueue {
+		return nil
+	}
+	q := m.findQueue(strings.TrimPrefix(item.key, "queue:"))
+	if q == nil {
+		return nil
+	}
+	m.containerLogGen++
+	return peekQueueCmd(m.flociEndpoint, *q, m.containerLogGen)
 }
 
 func (m *Model) stopContainerStream() {
