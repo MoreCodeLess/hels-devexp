@@ -160,15 +160,16 @@ Seleccionar una muestra los logs de ese contenedor en vivo, y si floci lo
 recicla (por inactividad) o crea uno nuevo, el dashboard se reengancha solo
 al que esté vivo.
 
-Ojo con el alcance real hoy: floci **no vuelca la salida de la ejecución de
-la función** (console.log, stack traces) a ningún lado accesible — ni a
-CloudWatch Logs (crea el log group/stream pero nunca les carga contenido) ni
-al `docker logs` del propio contenedor de la invocación (confirmado
-probando varias invocaciones reales). Así que hoy esta vista sirve sobre
-todo para saber **si tu función está siendo invocada y sigue "caliente"**,
-no todavía para ver su output — es un límite de floci, no de `hels`, y esta
-pieza queda lista para heredar esos logs el día que floci los exponga de
-verdad.
+**Corrección sobre una nota anterior**: en una vuelta previa se documentó
+acá que floci no exponía la salida real de una función (console.log, stack
+traces). Eso estaba mal — el chequeo original se hizo contra handlers que
+literalmente nunca llamaban a `console.log`, así que no había nada que
+mostrar, no importa el canal. Con un handler que sí loguea algo, tanto el
+`docker logs` del contenedor de la invocación como CloudWatch Logs (vía
+`FilterLogEvents` — `GetLogEvents` puntual devuelve vacío por una rareza de
+floci, pero `FilterLogEvents` sí trae el contenido real) muestran la salida
+real, confirmado de punta a punta. Así que esta vista sirve tanto para ver
+si tu función está "caliente" como para ver de verdad qué imprimió.
 
 **Colas SQS (`Q`) y tópicos SNS (`T`)**: mismo mecanismo — se listan las que
 haya desplegadas contra el entorno activo. Una cola muestra en su estado
